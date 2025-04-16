@@ -1,0 +1,48 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.12.35527.113
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ProjectMirage", "ProjectMirage.vcxproj", "{2081192A-E0F4-4063-991C-8BC49E70E2AE}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MirageAgent", "..\MirageAgent\MirageAgent.vcxproj", "{96FA8AE7-DCA1-46E5-BC82-EBF72A54010E}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LuaCryptor", "..\LuaCryptor\LuaCryptor.vcxproj", "{354A11FA-6275-4DBF-A996-AC86601D73B2}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{2081192A-E0F4-4063-991C-8BC49E70E2AE}.Debug|x64.ActiveCfg = Debug|x64
+		{2081192A-E0F4-4063-991C-8BC49E70E2AE}.Debug|x64.Build.0 = Debug|x64
+		{2081192A-E0F4-4063-991C-8BC49E70E2AE}.Debug|x86.ActiveCfg = Debug|Win32
+		{2081192A-E0F4-4063-991C-8BC49E70E2AE}.Debug|x86.Build.0 = Debug|Win32
+		{2081192A-E0F4-4063-991C-8BC49E70E2AE}.Release|x64.ActiveCfg = Release|x64
+		{2081192A-E0F4-4063-991C-8BC49E70E2AE}.Release|x64.Build.0 = Release|x64
+		{2081192A-E0F4-4063-991C-8BC49E70E2AE}.Release|x86.ActiveCfg = Release|Win32
+		{2081192A-E0F4-4063-991C-8BC49E70E2AE}.Release|x86.Build.0 = Release|Win32
+		{96FA8AE7-DCA1-46E5-BC82-EBF72A54010E}.Debug|x64.ActiveCfg = Debug|x64
+		{96FA8AE7-DCA1-46E5-BC82-EBF72A54010E}.Debug|x64.Build.0 = Debug|x64
+		{96FA8AE7-DCA1-46E5-BC82-EBF72A54010E}.Debug|x86.ActiveCfg = Debug|Win32
+		{96FA8AE7-DCA1-46E5-BC82-EBF72A54010E}.Debug|x86.Build.0 = Debug|Win32
+		{96FA8AE7-DCA1-46E5-BC82-EBF72A54010E}.Release|x64.ActiveCfg = Release|x64
+		{96FA8AE7-DCA1-46E5-BC82-EBF72A54010E}.Release|x64.Build.0 = Release|x64
+		{96FA8AE7-DCA1-46E5-BC82-EBF72A54010E}.Release|x86.ActiveCfg = Release|Win32
+		{96FA8AE7-DCA1-46E5-BC82-EBF72A54010E}.Release|x86.Build.0 = Release|Win32
+		{354A11FA-6275-4DBF-A996-AC86601D73B2}.Debug|x64.ActiveCfg = Debug|x64
+		{354A11FA-6275-4DBF-A996-AC86601D73B2}.Debug|x64.Build.0 = Debug|x64
+		{354A11FA-6275-4DBF-A996-AC86601D73B2}.Debug|x86.ActiveCfg = Debug|Win32
+		{354A11FA-6275-4DBF-A996-AC86601D73B2}.Debug|x86.Build.0 = Debug|Win32
+		{354A11FA-6275-4DBF-A996-AC86601D73B2}.Release|x64.ActiveCfg = Release|x64
+		{354A11FA-6275-4DBF-A996-AC86601D73B2}.Release|x64.Build.0 = Release|x64
+		{354A11FA-6275-4DBF-A996-AC86601D73B2}.Release|x86.ActiveCfg = Release|Win32
+		{354A11FA-6275-4DBF-A996-AC86601D73B2}.Release|x86.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

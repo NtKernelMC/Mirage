@@ -30,3 +30,9 @@
 *.exe
 *.out
 *.app
+/.vs
+/ProjectMirage/.vs/ProjectMirage
+/MirageAgent/Release
+/ProjectMirage/ProjectMirage/Release
+/ProjectMirage/Release
+/LuaCryptor/Release
