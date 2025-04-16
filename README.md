@@ -1,9 +1,11 @@
 # Mirage
-Hidden UGTA Lua Injector
+- Lua инжектор для копий NEXT RP и UKRAINE GTA на базе mta sa 1.5.9-custom
+- MTA:SA 1.6.0+ Official - Не поддерживается! Как и 1.6 форки.
+- ВНИМАНИЕ: Проект служит примером луа инжектора, разработчик сиего проекта не в ответе за ваши действия!
 
 # Сборка
-Главное .sln решение проекта расположено в ProjectMirage\ProjectMirage.sln
-Собирать на конфигурации Release x86
+- Главное .sln решение проекта расположено в ProjectMirage\ProjectMirage.sln
+- Собирать на конфигурации Release x86
 
 # Использование
 - Перекинуть свой луа скрипт на LuaCryptor.exe 
