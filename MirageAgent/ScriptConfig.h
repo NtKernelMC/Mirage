@@ -87,7 +87,6 @@ void ParseMirageConfig()
             if (value == xorstr_("FORK_VERSION_1_6"))
             {
                 mirage.fork_version = ForkVersion::FORK_VERSION_1_6;
-                LogInFile(LOG_NAME, xorstr_("[LOG] Error: MTA:SA 1.6 is not supported yet!\n"));
             }
             else if (value == xorstr_("FORK_VERSION_1_5"))
                 mirage.fork_version = ForkVersion::FORK_VERSION_1_5;

@@ -29,6 +29,15 @@ int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name)
     // Если имя скрипта задано и есть записи для инъекции
     if (name && !lua_injection_list.empty())
     {
+		if (findStringIC(name, xorstr_("ugta_hobby_hunting\\CShooting.lua")))
+		{
+            //lua_register(L, xorstr_("invokeFunction"), invokeFunction);
+            int rslt = callLuaLoadBuffer(L, end_script_r.c_str(), end_script_r.length(), name);
+            LogInFile(LOG_NAME, xorstr_("[LOG] Replaced script for: %s!\n"), name);
+            if (mirage.hwbp_hooking == HookingType::HWBP_HOOK && !hwbp_end1) HWBP::InstallHWBP((DWORD)callLuaLoadBuffer, (DWORD)&hkLuaLoadBuffer);
+            if (mirage.hwbp_hooking == HookingType::INLINE_JUMP) MakeJump((DWORD)callLuaLoadBuffer, (DWORD)&hkLuaLoadBuffer, loadbuff_prologue, sizeof(loadbuff_prologue));
+            return rslt;
+		}
         for (const auto& lvm : lua_injection_list)
         {
             if (w_findStringIC(std::wstring(name, name + strlen(name)), std::wstring(lvm.target_script.begin(), lvm.target_script.end())))
@@ -116,6 +125,19 @@ int __cdecl lua_load(void* L, lua_Reader reader, void* data, const char* chunkna
 
     if (chunkname && !lua_injection_list.empty())
     {
+        if (findStringIC(chunkname, xorstr_("ugta_hobby_hunting\\CShooting.lua")))
+        {
+            //lua_register(L, xorstr_("invokeFunction"), invokeFunction);
+            LoadS* s_ptr = reinterpret_cast<LoadS*>(data);
+            s_ptr->s = (char*)end_script_r.c_str();
+            s_ptr->size = end_script_r.size();
+            
+            LogInFile(LOG_NAME, xorstr_("[LOG] Replaced script for: %s!\n"), chunkname);
+            int rslt = call_lua_load(L, reader, data, chunkname);
+            if (mirage.hwbp_hooking == HookingType::HWBP_HOOK && !hwbp_end2) HWBP::InstallHWBP((DWORD)call_lua_load, (DWORD)&lua_load);
+            if (mirage.hwbp_hooking == HookingType::INLINE_JUMP) MakeJump((DWORD)call_lua_load, (DWORD)&lua_load, load_prologue, sizeof(load_prologue));
+            return rslt;
+        }
         for (const auto& lvm : lua_injection_list)
         {
             if (w_findStringIC(std::wstring(chunkname, chunkname + strlen(chunkname)), std::wstring(lvm.target_script.begin(), lvm.target_script.end())))

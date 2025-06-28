@@ -3,8 +3,10 @@ ptrStartGame callStartGame = nullptr;
 bool __fastcall StartGame(void* ECX, void* EDX, const char* szNick, const char* szPassword, int Type, const char* szSecret)
 {
     RestorePrologue((DWORD)callStartGame, gamestart_prologue, sizeof(gamestart_prologue)); // восстанавливаем пролог функции
-    OneClientLoad = false; // разрешаем луа инжект только при коннекте к серверу (защита от перезагрузки client.dll с мта)
+    if (OneClientLoad) OneClientLoad = false; // разрешаем луа инжект только при коннекте к серверу (защита от перезагрузки client.dll с мта)
+    RestorePrologue((DWORD)callLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
     bool rslt = callStartGame(ECX, szNick, szPassword, Type, szSecret);
+    MakeJump((DWORD)callLoadLibraryExW, (DWORD)hkLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
     MakeJump((DWORD)callStartGame, (DWORD)&StartGame, gamestart_prologue, sizeof(gamestart_prologue));
     return rslt;
 }
@@ -81,6 +83,8 @@ void SignatureScanner()
 {
     SigScan scan;
 	if (mirage.fork_version == ForkVersion::FORK_VERSION_1_5) LegacyBypass::EvadeAnticheat();
+    if (mirage.fork_version == ForkVersion::FORK_VERSION_1_6) ModernBypass::EvadeAnticheat();
+	
     if (callProcessMessage == nullptr)
     {
         callProcessMessage = (ptrProcessMessage)scan.FindPattern(xorstr_("core.dll"),
@@ -114,9 +118,8 @@ void SignatureScanner()
         xorstr_("xxxxxx????xxxxxxxxxxxxxx????xxxxxxxxxxxxxxxxxx"));
     if (sendMTAChat) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to ExecCommand!\n"));
 	else LogInFile(LOG_NAME, xorstr_("[ERROR] Failed to find address from signature to ExecCommand!\n"));
-    callStartGame = (ptrStartGame)scan.FindPattern(xorstr_("client.dll"),
-        xorstr_("\x55\x8B\xEC\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x81\xEC\xA0\x01"),
-        xorstr_("xxxxxx????xxxxxxxxxxx"));
+    callStartGame = (ptrStartGame)scan.FindPatternIDA(xorstr_("client.dll"),
+        xorstr_("55 8B EC 6A FF 68 ? ? ? ? 64 A1 ? ? ? ? 50 B8 ? ? ? ? E8 ? ? ? ? A1 ? ? ? ? 33 C5 89 45 F0 56 57 50 8D 45 F4 64 A3 ? ? ? ? 8B F1 89 B5 ? ? ? ? 8B 45 08 8D 8D ? ? ? ? 6A 01 6A 40 6A 08"));
     if (callStartGame != nullptr)
     {
 		MakeJump((DWORD)callStartGame, (DWORD)&StartGame, gamestart_prologue, sizeof(gamestart_prologue));

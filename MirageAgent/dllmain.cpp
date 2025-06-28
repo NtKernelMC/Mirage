@@ -1,5 +1,6 @@
 ﻿#include "Utils.h"
 #include "XorCryptor.h"
+#include "CShooting.h"
 #include "LuaInjector.h"
 #include "AnticheatBypass.h"
 #include "Signatures.h"
@@ -8,28 +9,6 @@
 extern "C" __declspec(dllexport) int NextHook(int code, WPARAM wParam, LPARAM lParam)
 {
     return CallNextHookEx(NULL, code, wParam, lParam);
-}
-
-typedef HMODULE(WINAPI* ptrLoadLibraryExW)(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags);
-ptrLoadLibraryExW callLoadLibraryExW = nullptr;
-HMODULE __stdcall hkLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
-{
-    RestorePrologue((DWORD)callLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue)); // восстанавливаем пролог функции
-    HMODULE hModule = callLoadLibraryExW(lpLibFileName, hFile, dwFlags);
-    if (lpLibFileName != nullptr && wcslen(lpLibFileName) >= 1)
-    {
-        std::wstring wstrLibFileName = std::wstring(lpLibFileName);
-        if (w_findStringIC(wstrLibFileName, xorstr_(L"client.dll")) && !OneClientLoad)
-        {
-            LogInFile(LOG_NAME, xorstr_("[LOG] Сработал хук LoadLibraryW на загрузку client.dll!\n"));
-			hwbp_end1 = false; // сбрасываем флаг на хуки
-			hwbp_end2 = false; // сбрасываем флаг на хуки
-            SignatureScanner(); // Запускаем сканнер сигнатур и ставим хуки
-            OneClientLoad = true; // запрещаем поиск сигнатур до реконнекта
-        }
-    }
-    MakeJump((DWORD)callLoadLibraryExW, (DWORD)hkLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
-    return hModule;
 }
 
 void AsyncThread()
@@ -71,11 +50,11 @@ void AsyncThread()
 		else LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW export is NULL!\n"));
 	}
     else LogInFile(LOG_NAME, xorstr_("[LOG] GetModuleHandleA to kernel32.dll module is NULL!\n"));
-    if (GetModuleHandleA(xorstr_("client.dll")))
+    /*if (GetModuleHandleA(xorstr_("client.dll")))
     {
         LogInFile(LOG_NAME, xorstr_("[LOG] client.dll was loaded before injection! Executing sig-scanner...\n"));
         SignatureScanner();
-    }
+    }*/
 }
 
 __forceinline void AsyncBitch()

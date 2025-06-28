@@ -149,6 +149,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AnticheatBypass.h" />
+    <ClInclude Include="CShooting.h" />
     <ClInclude Include="HWBP.h" />
     <ClInclude Include="HWID.h" />
     <ClInclude Include="LuaInjector.h" />

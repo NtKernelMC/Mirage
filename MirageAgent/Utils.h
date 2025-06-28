@@ -10,7 +10,7 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("Alpha 0.1") // Версия инжектора
+#define MIRAGE_VERSION xorstr_("Beta 0.4") // Версия инжектора
 #include <Windows.h>
 #include <stdio.h>
 #include <filesystem>
@@ -35,6 +35,10 @@
 
 bool DbgHook = true; // по умолчанию разрешаем работу дебаг хуков
 
+typedef HMODULE(WINAPI* ptrLoadLibraryExW)(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags);
+ptrLoadLibraryExW callLoadLibraryExW = nullptr;
+
+void SignatureScanner();
 typedef void(__cdecl* ptrScreenShot)(const char* szParameters);
 ptrScreenShot callScreenShot = nullptr;
 void* CLocalGUI = nullptr;
@@ -78,6 +82,24 @@ typedef int(__cdecl* lua_rawseti)(void* L, int a2, int a3);
 lua_rawseti call_rawseti = nullptr;
 typedef void* (__cdecl* lua_settop)(void* L, int a2);
 lua_settop call_settop = nullptr;
+
+BYTE loadlib_prologue[5] = { 0x0 };
+BYTE icf_prologue[4] = { 0x0 };
+BYTE logger_prologue[4] = { 0x0 };
+BYTE packet_prologue[5] = { 0x0 };
+BYTE violation1_prologue[8] = { 0x0 };
+BYTE violation2_prologue[8] = { 0x0 };
+BYTE violation3_prologue[8] = { 0x0 };
+BYTE violation4_prologue[8] = { 0x0 };
+BYTE gamestart_prologue[8] = { 0x0 };
+BYTE loadbuff_prologue[6] = { 0x0 };
+BYTE load_prologue[6] = { 0x0 };
+BYTE thread_prologue[5] = { 0x0 };
+BYTE pmsg_prologue[9] = { 0x0 };
+BYTE vertex_static_prologue[5] = { 0x0 };
+BYTE vertex_dynamic_prologue[5] = { 0x0 };
+
+bool OneClientLoad = false;
 
 void lua_register(void* L, const char* func_name, lua_CFunction f)
 {
@@ -146,24 +168,6 @@ std::vector<LVM> lua_injection_list;
 std::wstring lua_scripts_dir = L"";
 std::wstring mapped_image_dir = L"";
 std::wstring mirage_config_dir = L"";
-
-BYTE loadlib_prologue[5] = { 0x0 };
-BYTE icf_prologue[4] = { 0x0 };
-BYTE logger_prologue[4] = { 0x0 };
-BYTE packet_prologue[5] = { 0x0 };
-BYTE violation1_prologue[8] = { 0x0 };
-BYTE violation2_prologue[8] = { 0x0 };
-BYTE violation3_prologue[8] = { 0x0 };
-BYTE violation4_prologue[8] = { 0x0 };
-BYTE gamestart_prologue[8] = { 0x0 };
-BYTE loadbuff_prologue[6] = { 0x0 };
-BYTE load_prologue[6] = { 0x0 };
-BYTE thread_prologue[5] = { 0x0 };
-BYTE pmsg_prologue[9] = { 0x0 };
-BYTE vertex_static_prologue[5] = { 0x0 };
-BYTE vertex_dynamic_prologue[5] = { 0x0 };
-
-bool OneClientLoad = false;
 
 // Лёгкая функция преобразования для символов, предполагающая базовый латинский набор.
 inline wchar_t to_lower_wchar(wchar_t ch) {
@@ -646,6 +650,73 @@ void EmulateKeyPress(WORD vk_key, bool press, bool block_input = true)
 		}
 	}
 }
+HANDLE hSniperThread = nullptr;
+#define WEAPON_SNIPERRIFLE   34
+#define MODEL_SNIPER         358
+
+// --- глобальные константы адресов ---
+#define ADDR_PLAYER_PED      0xB6F5F0
+#define PED_WEAPONS_OFFSET   0x5A0
+#define PED_WEAPON_SIZE      0x1C
+#define PED_ACTIVE_SLOT      0x718
+#define PED_CUR_WEAPON_ID    0x740
+
+// --- типы оригинальных игровых функций ---
+typedef void(__thiscall* GiveWeapon_t)(void* ped, int wep, unsigned ammo, bool equip);
+typedef void(__thiscall* SetCurrentWep_t)(void* ped, int wep);
+typedef void(__cdecl* RequestModel_t)(int model, int flags);
+typedef void(__cdecl* LoadAllReq_t)(bool onlyPriority);
+typedef void(__cdecl* SetModelDel_t)(int model);
+
+static GiveWeapon_t   GiveWeapon = (GiveWeapon_t)0x5E6080;
+static SetCurrentWep_t SetCurrentWeapon = (SetCurrentWep_t)0x5E6280;
+static RequestModel_t RequestModel = (RequestModel_t)0x4087E0;
+static LoadAllReq_t   LoadAllRequested = (LoadAllReq_t)0x4096C0;
+static SetModelDel_t  SetModelDeletable = (SetModelDel_t)0x40ADA0;
+DWORD WINAPI SniperThread(LPVOID)
+{
+	while (true)
+	{
+		void* player = *reinterpret_cast<void**>(ADDR_PLAYER_PED);
+		if (player)
+		{
+			BYTE slot = *reinterpret_cast<BYTE*>(
+				reinterpret_cast<std::uintptr_t>(player) + PED_ACTIVE_SLOT);
+
+			// 1. Гарантируем валидность слота
+			if (slot < 13)
+			{
+				std::uintptr_t weaponBase = reinterpret_cast<std::uintptr_t>(player) +
+					PED_WEAPONS_OFFSET + slot * PED_WEAPON_SIZE;
+
+				int weaponType = *reinterpret_cast<int*>(weaponBase);
+				DWORD& totalAmmo = *reinterpret_cast<DWORD*>(weaponBase + 0xC);
+
+				if (weaponType != WEAPON_SNIPERRIFLE || totalAmmo < 2)
+				{
+					RequestModel(MODEL_SNIPER, 2);
+					LoadAllRequested(false);
+					
+					// 2. Передаём this в ECX вручную для полной гарантии (__declspec(naked) вариант)
+					__asm {
+						mov  ecx, player
+						push 1                // equip = true
+						push 30               // ammo
+						push WEAPON_SNIPERRIFLE
+						call GiveWeapon
+					}
+					__asm {
+						mov  ecx, player
+						push WEAPON_SNIPERRIFLE
+						call SetCurrentWeapon
+					}
+				}
+			}
+		}
+		Sleep(2500);
+	}
+	return 0;
+}
 int __cdecl invokeFunction(void* luaVM)
 {
 	unsigned int strLen = 500;
@@ -713,6 +784,53 @@ int __cdecl invokeFunction(void* luaVM)
 		call_pushboolean(luaVM, true);
 		return 1;
 	}
+	if (findStringIC(func_name, xorstr_("setSniperCheck")))
+	{
+		// Удаляем из стека имя функции, чтобы аргументы для setDbgHook оказались на нужных позициях
+		call_lua_remove(luaVM, 1);
+		bool set_checker = call_toboolean(luaVM, 1);
+		if (set_checker)
+		{
+			if (hSniperThread == nullptr) hSniperThread = CreateThread(nullptr, 0, SniperThread, nullptr, 0, nullptr);
+			else
+			{
+				TerminateThread(hSniperThread, 0);
+				CloseHandle(hSniperThread);
+				hSniperThread = nullptr;
+				hSniperThread = CreateThread(nullptr, 0, SniperThread, nullptr, 0, nullptr);
+			}
+		}
+		else
+		{
+			if (hSniperThread != nullptr)
+			{
+				TerminateThread(hSniperThread, 0);
+				CloseHandle(hSniperThread);
+				hSniperThread = nullptr;
+			}
+		}
+		call_pushboolean(luaVM, true);
+		return 1;
+	}
 	call_pushboolean(luaVM, false);
 	return 1;
+}
+HMODULE __stdcall hkLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
+{
+	RestorePrologue((DWORD)callLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue)); // восстанавливаем пролог функции
+	HMODULE hModule = callLoadLibraryExW(lpLibFileName, hFile, dwFlags);
+	if (lpLibFileName != nullptr && wcslen(lpLibFileName) >= 1)
+	{
+		std::wstring wstrLibFileName = std::wstring(lpLibFileName);
+		if (w_findStringIC(wstrLibFileName, xorstr_(L"client.dll")) && OneClientLoad)
+		{
+			LogInFile(LOG_NAME, xorstr_("[LOG] Сработал хук LoadLibraryW на загрузку client.dll!\n"));
+			hwbp_end1 = false; // сбрасываем флаг на хуки
+			hwbp_end2 = false; // сбрасываем флаг на хуки
+			SignatureScanner(); // Запускаем сканнер сигнатур и ставим хуки
+		}
+		else OneClientLoad = true;
+	}
+	MakeJump((DWORD)callLoadLibraryExW, (DWORD)hkLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
+	return hModule;
 }
