@@ -822,14 +822,14 @@ HMODULE __stdcall hkLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dw
 	if (lpLibFileName != nullptr && wcslen(lpLibFileName) >= 1)
 	{
 		std::wstring wstrLibFileName = std::wstring(lpLibFileName);
-		if (w_findStringIC(wstrLibFileName, xorstr_(L"client.dll")) && OneClientLoad)
+		bool mappedAsImage = (dwFlags & DONT_RESOLVE_DLL_REFERENCES) != 0;
+		if (w_findStringIC(wstrLibFileName, xorstr_(L"client.dll")) && !mappedAsImage)
 		{
 			LogInFile(LOG_NAME, xorstr_("[LOG] Сработал хук LoadLibraryW на загрузку client.dll!\n"));
 			hwbp_end1 = false; // сбрасываем флаг на хуки
 			hwbp_end2 = false; // сбрасываем флаг на хуки
 			SignatureScanner(); // Запускаем сканнер сигнатур и ставим хуки
 		}
-		else OneClientLoad = true;
 	}
 	MakeJump((DWORD)callLoadLibraryExW, (DWORD)hkLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
 	return hModule;
