@@ -22,6 +22,7 @@ void AsyncThread()
         mirage_config_dir = reg->ReadString(xorstr_(L"UpdateDir")); // путь с конфигом луа инжектора
         delete reg;
     }
+    MH_Initialize();
     RemoveOldLog();
 	RemoveOldDumpedScripts(xorstr_("DumpedScripts"));
     RemoveOldDumpedScripts(xorstr_("Chunks"));

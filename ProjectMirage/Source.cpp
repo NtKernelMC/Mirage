@@ -137,7 +137,7 @@ int main()
     {
 		LogInFile(LOG_NAME, xorstr_("Открыт хендл процесса GTA:SA! PID: %d\n"), proc_id);
         InjectDLL(hProc, proc_id, mapped_image_dir + xorstr_(L"\\MirageAgent.dll"));
-        CloseHandle(hProc);
+        CloseHandle(hProc); Sleep(3000); ExitProcess(0x0);
     }
 	else LogInFile(LOG_NAME, xorstr_("Не удалось открыть хендл процесса GTA:SA! PID: %d\n"), proc_id);
     while (true) Sleep(1000);

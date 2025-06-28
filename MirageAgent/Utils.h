@@ -32,6 +32,8 @@
 #include "Registry.h"
 #include "HWBP.h"
 #include "HWID.h"
+#include "MinHook.h"
+#pragma comment(lib, "libMinHook.x86.lib")
 
 bool DbgHook = true; // по умолчанию разрешаем работу дебаг хуков
 
@@ -95,7 +97,7 @@ BYTE gamestart_prologue[8] = { 0x0 };
 BYTE loadbuff_prologue[6] = { 0x0 };
 BYTE load_prologue[6] = { 0x0 };
 BYTE thread_prologue[5] = { 0x0 };
-BYTE pmsg_prologue[9] = { 0x0 };
+BYTE pmsg_prologue[8] = { 0x0 };
 BYTE vertex_static_prologue[5] = { 0x0 };
 BYTE vertex_dynamic_prologue[5] = { 0x0 };
 
@@ -600,10 +602,10 @@ void EmulateKeyPress(WORD vk_key, bool press, bool block_input = true)
 	if (hwnd == nullptr) hwnd = FindWindowA(NULL, xorstr_("MTA: San Andreas"));
 	if (hwnd != nullptr)
 	{
-		if (callIsChatBoxInputEnabled != nullptr && CLocalGUI != nullptr)
+		/*if (callIsChatBoxInputEnabled != nullptr && CLocalGUI != nullptr)
 		{
 			if (callIsChatBoxInputEnabled(CLocalGUI) && block_input) return;
-		}
+		}*/
 
 		// Получаем скан-код
 		UINT scan_code = MapVirtualKeyA(vk_key, MAPVK_VK_TO_VSC);

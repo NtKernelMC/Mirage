@@ -13,9 +13,7 @@ typedef bool(__thiscall* ptrProcessMessage)(void* ECX, HWND__* hwnd, unsigned in
 ptrProcessMessage callProcessMessage = nullptr;
 bool __fastcall ProcessMessage(void* ECX, void* EDX, HWND__* hwnd, unsigned int uMsg, unsigned int wParam, int lParam)
 {
-	RestorePrologue((DWORD)callProcessMessage, pmsg_prologue, sizeof(pmsg_prologue)); // восстанавливаем пролог функции
-    CLocalGUI = ECX;
-    LogInFile(LOG_NAME, xorstr_("[LOG] Снят указатель CLocalGUI из хука ProcessMessage, хук удален!\n"));
+	CLocalGUI = ECX;
     return callProcessMessage(ECX, hwnd, uMsg, wParam, lParam);
 }
 typedef BOOL(__stdcall* ptrGetThreadContext)(HANDLE hThread, LPCONTEXT lpContext);
@@ -90,10 +88,12 @@ void SignatureScanner()
             xorstr_("\x55\x8B\xEC\x81\xEC\x14\x02"), xorstr_("xxxxxxx"));
         if (callProcessMessage != nullptr)
         {
-            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to ProcessMessage!\n"));
-            MakeJump((DWORD)callProcessMessage, (DWORD)&ProcessMessage, pmsg_prologue, sizeof(pmsg_prologue));
+            //LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to ProcessMessage!\n"));
+            //MH_RemoveHook(callProcessMessage);
+            //MH_CreateHook(callProcessMessage, &ProcessMessage, reinterpret_cast<LPVOID*>(&callProcessMessage));
+            //MH_EnableHook(MH_ALL_HOOKS);
         }
-        else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for ProcessMessage.\n"));
+        //else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for ProcessMessage.\n"));
     }
     callAddDebugHook = (ptrAddDebugHook)scan.FindPattern(xorstr_("client.dll"),
         xorstr_("\x55\x8B\xEC\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x81\xEC\xF4\x00\x00\x00\xA1\x00\x00\x00\x00\x33\xC5\x89\x45\xF0\x56\x57\x50\x8D\x45\xF4\x64\xA3\x00\x00\x00\x00\x8B\x75"),
