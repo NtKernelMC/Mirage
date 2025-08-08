@@ -10,10 +10,11 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("Beta 0.4") // Версия инжектора
+#define MIRAGE_VERSION xorstr_("V4") // Версия инжектора
 #include <Windows.h>
 #include <stdio.h>
 #include <filesystem>
+#include <mutex>
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -33,13 +34,31 @@
 #include "HWBP.h"
 #include "HWID.h"
 #include "MinHook.h"
+#include "CVector.h"
+#include "CVector2D.h"
+#include <random>
+#include "magic_enum/include/magic_enum.hpp"
+#include "WepTypes.h"
 #pragma comment(lib, "libMinHook.x86.lib")
-
+#pragma comment(lib, "Winmm.lib")
+#include "NetAPI/CNet.h"
+#include "NetAPI/Packets.h"
+#include "NetAPI/SyncStructures.h"
+void __stdcall LogInFile(std::string log_name, const char* log, ...);
+#include "IAT.h"
+CNet* g_pNet = nullptr;
+bool crasher = false;
+bool cursed_voice = false;
 bool DbgHook = true; // по умолчанию разрешаем работу дебаг хуков
-
+void* CNetAPI = nullptr;
+bool HideCall = false;
+BYTE exit_prologue[5] = { 0x0 };
+typedef BOOL(__stdcall* ptrGetThreadContext)(HANDLE hThread, LPCONTEXT lpContext);
+ptrGetThreadContext callGetThreadContext = nullptr;
+BOOL __stdcall hookGetThreadContext(HANDLE hThread, LPCONTEXT lpContext);
 typedef HMODULE(WINAPI* ptrLoadLibraryExW)(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags);
 ptrLoadLibraryExW callLoadLibraryExW = nullptr;
-
+BYTE getproc_prologue[5];
 void SignatureScanner();
 typedef void(__cdecl* ptrScreenShot)(const char* szParameters);
 ptrScreenShot callScreenShot = nullptr;
@@ -84,6 +103,7 @@ typedef int(__cdecl* lua_rawseti)(void* L, int a2, int a3);
 lua_rawseti call_rawseti = nullptr;
 typedef void* (__cdecl* lua_settop)(void* L, int a2);
 lua_settop call_settop = nullptr;
+int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name);
 
 BYTE loadlib_prologue[5] = { 0x0 };
 BYTE icf_prologue[4] = { 0x0 };
@@ -127,6 +147,7 @@ enum class HookingType
 {
 	HWBP_HOOK = 0,
 	INLINE_JUMP = 1,
+	IAT = 2,
 };
 
 enum class DllInjectionType
@@ -140,6 +161,7 @@ enum class FuckDbgHooksMode
 	ALLOW_DBG_HOOKS = 0,
 	FUCK_DBG_HOOKS = 1,
 	PROTECTED_MODE = 2,
+	STEALTH_MODE = 3,
 };
 
 typedef struct
@@ -739,6 +761,14 @@ int __cdecl invokeFunction(void* luaVM)
 		call_pushboolean(luaVM, dbg);
 		return 1;
 	}
+	if (findStringIC(func_name, xorstr_("hideFunctionCall")))
+	{
+		// Удаляем из стека имя функции, чтобы аргументы для setDbgHook оказались на нужных позициях
+		call_lua_remove(luaVM, 1);
+		HideCall = call_toboolean(luaVM, 1);
+		call_pushboolean(luaVM, true);
+		return 1;
+	}
 	if (findStringIC(func_name, xorstr_("removeDbgHook")))
 	{
 		// Удаляем из стека имя функции, чтобы аргументы для setDbgHook оказались на нужных позициях
@@ -816,6 +846,83 @@ int __cdecl invokeFunction(void* luaVM)
 	}
 	call_pushboolean(luaVM, false);
 	return 1;
+}
+void CorePatcher()
+{
+	SigScan scan; DWORD oldProtect = 0;
+	DWORD patch_addr = (DWORD)scan.FindPatternIDA(xorstr_("core.dll"), xorstr_("68 ? ? ? ? 68 ? ? ? ? E8"));
+	if (patch_addr != NULL)
+	{
+		BYTE nop[15] = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
+		VirtualProtect((void*)patch_addr, sizeof(nop), PAGE_EXECUTE_READWRITE, &oldProtect);
+		memcpy((void*)patch_addr, nop, sizeof(nop));
+		VirtualProtect((void*)patch_addr, sizeof(nop), oldProtect, &oldProtect);
+		LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to AC_HookGetProcAddr!\n"));
+	}
+	else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for AC_HookGetProcAddr.\n"));
+}
+void FuckHWBP()
+{
+	THREADENTRY32 th32; HANDLE hSnapshot = NULL; th32.dwSize = sizeof(THREADENTRY32);
+	hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+	if (Thread32First(hSnapshot, &th32))
+	{
+		do
+		{
+			if (th32.th32OwnerProcessID == GetCurrentProcessId() && th32.th32ThreadID != GetCurrentThreadId())
+			{
+				HANDLE pThread = OpenThread(THREAD_ALL_ACCESS, FALSE, th32.th32ThreadID);
+				if (pThread)
+				{
+					SuspendThread(pThread); CONTEXT context = { 0 };
+					context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+					GetThreadContext(pThread, &context);
+					context.Dr7 = 0x0;
+					*(DWORD_PTR*)&context.Dr0 = 0x0;
+					*(DWORD_PTR*)&context.Dr1 = 0x0;
+					*(DWORD_PTR*)&context.Dr2 = 0x0;
+					*(DWORD_PTR*)&context.Dr3 = 0x0;
+					SetThreadContext(pThread, &context);
+					ResumeThread(pThread); CloseHandle(pThread);
+					LogInFile(LOG_NAME, xorstr_("[LOG] Removed hardware breakpoints from thread ID: %d\n"), th32.th32ThreadID);
+				}
+			}
+		} while (Thread32Next(hSnapshot, &th32));
+	}
+}
+bool RemoveProcedureHook()
+{
+	HMODULE hK32 = GetModuleHandleA(xorstr_("kernel32.dll"));
+	HMODULE hKB = GetModuleHandleA(xorstr_("kernelBase.dll"));
+
+	if (!hK32 && !hKB) return false;
+
+	using GETPROC_T = FARPROC(WINAPI*)(HMODULE, LPCSTR);
+	GETPROC_T gp = reinterpret_cast<GETPROC_T>(&::GetProcAddress);
+
+	FARPROC self = nullptr;
+	if (hK32) self = gp(hK32, xorstr_("GetProcAddress"));
+	if (!self && hKB) self = gp(hKB, xorstr_("GetProcAddress"));
+	if (!self) return false;
+
+	BYTE* p = reinterpret_cast<BYTE*>(self);
+	const BYTE orig[5] = { 0x8B, 0xFF, 0x55, 0x8B, 0xEC };
+	if (std::memcmp(p, orig, sizeof(orig)) == 0) return true;
+	if (p[0] != 0xE9)
+	{
+		LogInFile(LOG_NAME, xorstr_("[ERROR] AC_HookGetProcAddr is not hooked!\n"));
+		return false;
+	}
+	DWORD oldProtect = 0;
+	if (!VirtualProtect(p, sizeof(orig), PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+
+	std::memcpy(p, orig, sizeof(orig));
+	FlushInstructionCache(GetCurrentProcess(), p, sizeof(orig));
+
+	DWORD tmp = 0;
+	VirtualProtect(p, sizeof(orig), oldProtect, &tmp);
+
+	return true;
 }
 HMODULE __stdcall hkLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {

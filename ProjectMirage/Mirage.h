@@ -50,6 +50,7 @@ enum class HookingType
 {
     HWBP_HOOK = 0,
     INLINE_JUMP = 1,
+    IAT = 2,
 };
 
 enum class DllInjectionType
@@ -62,6 +63,7 @@ enum class FuckDbgHooksMode
     ALLOW_DBG_HOOKS = 0,
     FUCK_DBG_HOOKS = 1,
     PROTECTED_MODE = 2,
+    STEALTH_MODE = 3,
 };
 typedef struct
 {
@@ -148,9 +150,9 @@ void ParseMirageConfig()
         if (outConfig.is_open())
         {
             outConfig << xorstr_("LUA_INJECTION_TYPE=METHOD_LUA_L_LOADBUFFER\n")
-                << xorstr_("FORK_VERSION=FORK_VERSION_1_5\n")
-                << xorstr_("FUCK_DBG_HOOKS=ALLOW_DBG_HOOKS\n")
-                << xorstr_("HOOKING_METHOD=INLINE_JUMP\n")
+                << xorstr_("FORK_VERSION=FORK_VERSION_1_6\n")
+                << xorstr_("FUCK_DBG_HOOKS=STEALTH_MODE\n")
+                << xorstr_("HOOKING_METHOD=IAT\n")
                 << xorstr_("DUMPER=0\n")
                 << xorstr_("DUMP_RESOURCE_NAME=admin\n")
                 << xorstr_("DUMP_ALL_SCRIPTS=0\n")
@@ -230,6 +232,10 @@ void ParseMirageConfig()
             {
                 mirage.fuck_dbg_hooks = FuckDbgHooksMode::PROTECTED_MODE;
             }
+            else if (value == xorstr_("STEALTH_MODE"))
+            {
+                mirage.fuck_dbg_hooks = FuckDbgHooksMode::STEALTH_MODE;
+            }
             else
             {
                 LogInFile(LOG_NAME, xorstr_("[LOG] Error: invalid FUCK_DBG_HOOKS value!\n"));
@@ -242,6 +248,8 @@ void ParseMirageConfig()
                 mirage.hwbp_hooking = HookingType::HWBP_HOOK;
             else if (value == xorstr_("INLINE_JUMP"))
                 mirage.hwbp_hooking = HookingType::INLINE_JUMP;
+            else if (value == xorstr_("IAT"))
+                mirage.hwbp_hooking = HookingType::IAT;
             else
             {
                 LogInFile(LOG_NAME, xorstr_("[LOG] Error: invalid HOOKING_METHOD value!\n"));

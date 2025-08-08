@@ -13,6 +13,12 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="NetAPI">
+      <UniqueIdentifier>{424377a9-d3f9-4b7a-8509-1ee94c47a325}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="NetAPI\utils">
+      <UniqueIdentifier>{8791d2c8-605a-49ad-aeea-e41f40114aff}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -57,6 +63,78 @@
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="CShooting.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="CVector.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="WepTypes.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="sigscan.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\bitstream.h">
+      <Filter>NetAPI</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\CNet.h">
+      <Filter>NetAPI</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\CNetHTTPDownloadManagerInterface.h">
+      <Filter>NetAPI</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\Common.h">
+      <Filter>NetAPI</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\net_common.h">
+      <Filter>NetAPI</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\packetenums.h">
+      <Filter>NetAPI</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\Packets.h">
+      <Filter>NetAPI</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\SyncStructures.h">
+      <Filter>NetAPI</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\utils\SharedUtil.Defines.h">
+      <Filter>NetAPI\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\utils\SharedUtil.Game.h">
+      <Filter>NetAPI\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\utils\SharedUtil.Game.hpp">
+      <Filter>NetAPI\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\utils\SharedUtil.IntTypes.h">
+      <Filter>NetAPI\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\utils\SharedUtil.Map.h">
+      <Filter>NetAPI\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\utils\SharedUtil.Misc.h">
+      <Filter>NetAPI\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\utils\SharedUtil.Misc.hpp">
+      <Filter>NetAPI\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\utils\SString.h">
+      <Filter>NetAPI\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\utils\SString.hpp">
+      <Filter>NetAPI\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\utils\WString.h">
+      <Filter>NetAPI\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="NetAPI\utils\WString.hpp">
+      <Filter>NetAPI\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="CVector2D.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="IAT.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
   </ItemGroup>

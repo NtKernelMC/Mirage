@@ -135,6 +135,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />
+    <ClInclude Include="sigscan.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="LuaCryptor.rc" />

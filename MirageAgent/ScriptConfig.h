@@ -114,6 +114,11 @@ void ParseMirageConfig()
                 mirage.fuck_dbg_hooks = FuckDbgHooksMode::PROTECTED_MODE;
                 DbgHook = false;
             }
+            else if (value == xorstr_("STEALTH_MODE"))
+            {
+                mirage.fuck_dbg_hooks = FuckDbgHooksMode::STEALTH_MODE;
+                DbgHook = false;
+            }
             else
             {
                 LogInFile(LOG_NAME, xorstr_("[LOG] Error: invalid FUCK_DBG_HOOKS value!\n"));
@@ -126,6 +131,8 @@ void ParseMirageConfig()
                 mirage.hwbp_hooking = HookingType::HWBP_HOOK;
             else if (value == xorstr_("INLINE_JUMP"))
                 mirage.hwbp_hooking = HookingType::INLINE_JUMP;
+            else if (value == xorstr_("IAT"))
+                mirage.hwbp_hooking = HookingType::IAT;
             else
             {
                 LogInFile(LOG_NAME, xorstr_("[LOG] Error: invalid HOOKING_METHOD value!\n"));

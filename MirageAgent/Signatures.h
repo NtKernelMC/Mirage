@@ -1,11 +1,9 @@
-typedef bool(__thiscall* ptrStartGame)(void* ECX, const char* szNick, const char* szPassword, int Type, const char* szSecret);
+﻿typedef bool(__thiscall* ptrStartGame)(void* ECX, const char* szNick, const char* szPassword, int Type, const char* szSecret);
 ptrStartGame callStartGame = nullptr;
 bool __fastcall StartGame(void* ECX, void* EDX, const char* szNick, const char* szPassword, int Type, const char* szSecret)
 {
-    RestorePrologue((DWORD)callStartGame, gamestart_prologue, sizeof(gamestart_prologue)); // ��������������� ������ �������
-    RestorePrologue((DWORD)callLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
+    RestorePrologue((DWORD)callStartGame, gamestart_prologue, sizeof(gamestart_prologue)); // восстанавливаем пролог функции
     bool rslt = callStartGame(ECX, szNick, szPassword, Type, szSecret);
-    MakeJump((DWORD)callLoadLibraryExW, (DWORD)hkLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
     MakeJump((DWORD)callStartGame, (DWORD)&StartGame, gamestart_prologue, sizeof(gamestart_prologue));
     return rslt;
 }
@@ -16,11 +14,9 @@ bool __fastcall ProcessMessage(void* ECX, void* EDX, HWND__* hwnd, unsigned int 
 	CLocalGUI = ECX;
     return callProcessMessage(ECX, hwnd, uMsg, wParam, lParam);
 }
-typedef BOOL(__stdcall* ptrGetThreadContext)(HANDLE hThread, LPCONTEXT lpContext);
-ptrGetThreadContext callGetThreadContext = nullptr;
 BOOL __stdcall hookGetThreadContext(HANDLE hThread, LPCONTEXT lpContext)
 {
-	RestorePrologue((DWORD)callGetThreadContext, thread_prologue, sizeof(thread_prologue)); // ��������������� ������ �������
+	RestorePrologue((DWORD)callGetThreadContext, thread_prologue, sizeof(thread_prologue)); // восстанавливаем пролог функции
     BOOL rslt = callGetThreadContext(hThread, lpContext);
     if ((lpContext->Dr0 != NULL || lpContext->Dr1 != NULL || lpContext->Dr2 != NULL || lpContext->Dr3 != NULL) || lpContext->Dr7 != NULL)
     {
@@ -67,7 +63,12 @@ int __cdecl AddDebugHook(void* L)
                     call_pushstring(L, xorstr_("fuckThisGay"));
                     call_rawseti(L, 3, i);
                 }
-                call_settop(L, -2); // ������� ������� � ������� �����
+                else if (strcmp(s, xorstr_("triggerLatentServerEvent")) == 0)
+                {
+                    call_pushstring(L, xorstr_("hookMeBitch"));
+                    call_rawseti(L, 3, i);
+                }
+                call_settop(L, -2); // Удаляем элемент с вершины стека
             }
         }
     }
@@ -76,11 +77,192 @@ int __cdecl AddDebugHook(void* L)
     call_pushboolean(L, rslt);
     return rslt;
 }
+typedef void(__thiscall* ptrSendBulletSyncFire)(void* ECX, eWeaponType weaponType, CVector& vecStart, CVector& vecEnd, float fDamage, BYTE ucHitZone, void* pRemoteDamagedPlayer);
+ptrSendBulletSyncFire callSendBulletSyncFire = nullptr;
+void __fastcall SendBulletSyncFire(void* ECX, void* EDX, eWeaponType weaponType, CVector& vecStart, CVector& vecEnd, float fDamage, BYTE ucHitZone, void* pRemoteDamagedPlayer)
+{
+    callSendBulletSyncFire(ECX, weaponType, vecStart, vecEnd, fDamage, ucHitZone, pRemoteDamagedPlayer);
+}
+static std::string kDumpDir{ xorstr_("DumpedHeap") };
+std::string utf8_to_cp1251_safe(const char* data, size_t len)
+{
+    std::string out;
+    size_t      offset = 0;
+
+    while (offset < len)
+    {
+        // ищем следующий 0x00
+        size_t next0 = offset;
+        while (next0 < len && data[next0] != '\0')
+            ++next0;
+
+        const char* chunk = data + offset;
+        size_t      clen = next0 - offset;           // длина куска без 0
+
+        if (clen)
+        {
+            // пробуем обычную конвертацию
+            int wlen = MultiByteToWideChar(
+                CP_UTF8, MB_ERR_INVALID_CHARS,
+                chunk, static_cast<int>(clen),
+                nullptr, 0);
+
+            if (wlen > 0)
+            {
+                std::vector<wchar_t> wbuf(static_cast<size_t>(wlen));
+                MultiByteToWideChar(CP_UTF8, 0,
+                    chunk, static_cast<int>(clen),
+                    wbuf.data(), wlen);
+
+                int cplen = WideCharToMultiByte(
+                    1251, 0,
+                    wbuf.data(), wlen,
+                    nullptr, 0, nullptr, nullptr);
+
+                if (cplen > 0)
+                {
+                    size_t old = out.size();
+                    out.resize(old + static_cast<size_t>(cplen));
+                    WideCharToMultiByte(
+                        1251, 0,
+                        wbuf.data(), wlen,
+                        out.data() + old, cplen,
+                        nullptr, nullptr);
+                }
+                else
+                {
+                    // CP-1251 не смог — копируем «как есть»
+                    out.append(chunk, clen);
+                }
+            }
+            else
+            {
+                // битый UTF-8 — копируем «как есть»
+                out.append(chunk, clen);
+            }
+        }
+
+        // если встретили 0x00 в середине буфера — сохраняем его тоже
+        if (next0 < len)
+            out.push_back('\0');
+
+        offset = next0 + 1;   // переходим за найденный 0
+    }
+
+    return out;
+}
+static std::string GenerateDumpPath()
+{
+    // Время в мс от эпохи Unix
+    const uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch())
+        .count();
+
+    // Потокобезопасный RNG
+    thread_local std::mt19937 rng{
+        static_cast<std::mt19937::result_type>(
+            std::chrono::steady_clock::now().time_since_epoch().count()) };
+
+    std::uniform_int_distribution<int> dist(10000, 99999);
+
+    std::ostringstream oss;
+    oss << "mem_" << now_ms << '_' << dist(rng) << ".dmp";
+
+    return (std::filesystem::path(kDumpDir) / oss.str()).string();
+}
+
+typedef void(__thiscall* ptrDecodeAndBuffer)(void* ECX, char* pBuffer, unsigned int bytesWritten);
+ptrDecodeAndBuffer callDecodeAndBuffer = nullptr;
+// Хук-обёртка оригинальной функции
+void __fastcall DecodeAndBuffer(void* ECX, void* EDX, char* pBuffer, unsigned int bytesWritten)
+{
+    if (pBuffer && bytesWritten > 10000 && cursed_voice)
+    {
+        std::string filePath = GenerateDumpPath();
+		if (filePath.empty())
+		{
+			LogInFile(LOG_NAME, xorstr_("[ERROR] Failed to generate dump file path.\n"));
+			callDecodeAndBuffer(ECX, pBuffer, bytesWritten);
+			return;
+		}
+		LogInFile(LOG_NAME, xorstr_("[PLUGIN] Dumping memory to file: %s\n"), filePath.c_str());
+        std::ofstream dump(filePath, std::ios::binary);
+        if (!dump.is_open())
+        {
+			LogInFile(LOG_NAME, xorstr_("[ERROR] Failed to open dump file: %s\n"), filePath.c_str());
+            callDecodeAndBuffer(ECX, pBuffer, bytesWritten);
+            return;
+        }
+        dump.write(pBuffer, bytesWritten);
+        dump.close();
+		LogInFile(LOG_NAME, xorstr_("[PLUGIN] Memory dump saved to: %s\n"), filePath.c_str());
+    }
+    callDecodeAndBuffer(ECX, pBuffer, bytesWritten);
+}
+static std::vector<std::string> vecHooks =
+{
+    xorstr_("addDebugHook"),
+    xorstr_("triggerServerEvent"),
+    xorstr_("triggerLatentServerEvent"),
+    xorstr_("addEventHandler"),
+    xorstr_("loadstring"),
+    xorstr_("load"),
+    xorstr_("setPlayerNametagText"),
+    xorstr_("setElementData"),
+    xorstr_("blowVehicle")
+};
+typedef bool(__thiscall* ptrIsNameAllowed)(void* ECX, const char* szName, void* eventHookList, bool bNameMustBeExplicitlyAllowed);
+ptrIsNameAllowed callIsNameAllowed = nullptr;
+bool __fastcall IsNameAllowed(void* ECX, void* EDX, const char* szName, void* eventHookList, bool bNameMustBeExplicitlyAllowed)
+{
+    for (const auto& hook : vecHooks)
+    {
+        if (szName != nullptr && !strcmp(szName, hook.c_str()) && HideCall)
+        {
+            //LogInFile(LOG_NAME, xorstr_("[LOG] Hook of %s is skipped!\n"), szName);
+            return false; // Блокируем хук
+        }
+    }
+    return callIsNameAllowed(ECX, szName, eventHookList, bNameMustBeExplicitlyAllowed);
+}
 void SignatureScanner()
 {
     SigScan scan;
 	if (mirage.fork_version == ForkVersion::FORK_VERSION_1_5) LegacyBypass::EvadeAnticheat();
-    if (mirage.fork_version == ForkVersion::FORK_VERSION_1_6) ModernBypass::EvadeAnticheat();
+    if (mirage.fork_version == ForkVersion::FORK_VERSION_1_6)
+    {
+        ModernBypass::EvadeAnticheat(); DWORD oldProtect = 0x0;
+        DWORD patch_addr = (DWORD)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("E8 ? ? ? ? 83 C4 ? 46 3B F7 0F 8C"));
+        if (patch_addr != NULL)
+        {
+            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to AC_CheckDlls!\n"));
+            BYTE nop[5] = { 0x90, 0x90, 0x90, 0x90, 0x90 };
+            VirtualProtect((void*)patch_addr, 5, PAGE_EXECUTE_READWRITE, &oldProtect);
+            memcpy((void*)patch_addr, nop, 5);
+            VirtualProtect((void*)patch_addr, 5, oldProtect, &oldProtect);
+        }
+        else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for AC_CheckDlls.\n"));
+        patch_addr = (DWORD)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("E8 ? ? ? ? 33 FF 39 BD"));
+        if (patch_addr != NULL)
+        {
+            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to AC_AntiMirage!\n"));
+            BYTE nop[5] = { 0x90, 0x90, 0x90, 0x90, 0x90 };
+            VirtualProtect((void*)patch_addr, sizeof(nop), PAGE_EXECUTE_READWRITE, &oldProtect);
+            memcpy((void*)patch_addr, nop, sizeof(nop));
+            VirtualProtect((void*)patch_addr, sizeof(nop), oldProtect, &oldProtect);
+        }
+        else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for AC_AntiMirage.\n"));
+        patch_addr = (DWORD)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("E8 ? ? ? ? 83 C4 ? 47 3B BD"));
+        if (patch_addr != NULL)
+        {
+            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to AC_ScanProcesses!\n"));
+            BYTE nop[5] = { 0x90, 0x90, 0x90, 0x90, 0x90 };
+            VirtualProtect((void*)patch_addr, sizeof(nop), PAGE_EXECUTE_READWRITE, &oldProtect);
+            memcpy((void*)patch_addr, nop, sizeof(nop));
+            VirtualProtect((void*)patch_addr, sizeof(nop), oldProtect, &oldProtect);
+        }
+        else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for AC_ScanProcesses.\n"));
+    }
 	
     if (callProcessMessage == nullptr)
     {
@@ -95,13 +277,47 @@ void SignatureScanner()
         }
         //else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for ProcessMessage.\n"));
     }
+    PVOID getPedVoice = (PVOID)scan.FindPatternIDA(xorstr_("client.dll"),
+        xorstr_("55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 50 8D 45 ? 64 A3 ? ? ? ? 8B 75 ? 8D 8D ? ? ? ? 56 C7 85 ? ? ? ? ? ? ? ? E8 ? ? ? ? 6A ? 6A ? 8D 85 ? ? ? ? C7 45 ? ? ? ? ? 50 6A ? 8D 8D ? ? ? ? E8 ? ? ? ? 83 BD ? ? ? ? ? 74 ? 83 BD ? ? ? ? ? 74 ? C7 05 ? ? ? ? ? ? ? ? 8A 85 ? ? ? ? 84 C0 0F 85 ? ? ? ? 83 7D ? ? 74 ? 83 7D ? ? 8D 45 ? 0F 47 45 ? 50 FF B5 ? ? ? ? FF 35 ? ? ? ? E8 ? ? ? ? 83 C4 ? C7 45 ? ? ? ? ? 83 7D ? ? 8D 45 ? 0F 47 45 ? ? ? ? 8A 85 ? ? ? ? 84 C0 0F 85 ? ? ? ? 8B 8D ? ? ? ? E8 ? ? ? ? 84 C0"));
+    if (getPedVoice != nullptr)
+    {
+        LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to getPedVoice!\n"));
+        MH_RemoveHook(getPedVoice);
+        MH_CreateHook(getPedVoice, invokeFunction, reinterpret_cast<LPVOID*>(&getPedVoice));
+        MH_EnableHook(MH_ALL_HOOKS);
+    }
+    else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for getPedVoice.\n"));
+    callDecodeAndBuffer = (ptrDecodeAndBuffer)scan.FindPatternIDA(xorstr_("client.dll"),
+        xorstr_("55 8B EC 6A FF 68 ? ? ? ? 64 A1 00 00 00 00 50 81 EC 34 08"));
+    if (callDecodeAndBuffer != nullptr)
+    {
+        LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to DecodeAndBuffer!\n"));
+        MH_RemoveHook(callDecodeAndBuffer);
+        MH_CreateHook(callDecodeAndBuffer, DecodeAndBuffer, reinterpret_cast<LPVOID*>(&callDecodeAndBuffer));
+        MH_EnableHook(MH_ALL_HOOKS);
+    }
+    else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for DecodeAndBuffer.\n"));
+    /*callSendBulletSyncFire = (ptrSendBulletSyncFire)scan.FindPattern(xorstr_("client.dll"),
+        xorstr_("\x55\x8B\xEC\x56\x8B\xF1\x8B\x00\x00\x00\x00\x00\x57"),
+        xorstr_("xxxxxxx?????x")); // SendBulletSyncFire
+    if (callSendBulletSyncFire != nullptr)
+    {
+        LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to SendBulletSyncFire!\n"));
+        MH_RemoveHook(callSendBulletSyncFire);
+        MH_CreateHook(callSendBulletSyncFire, &SendBulletSyncFire, reinterpret_cast<LPVOID*>(&callSendBulletSyncFire));
+        MH_EnableHook(MH_ALL_HOOKS);
+    }
+    else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for SendBulletSyncFire.\n"));*/
     callAddDebugHook = (ptrAddDebugHook)scan.FindPattern(xorstr_("client.dll"),
         xorstr_("\x55\x8B\xEC\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x81\xEC\xF4\x00\x00\x00\xA1\x00\x00\x00\x00\x33\xC5\x89\x45\xF0\x56\x57\x50\x8D\x45\xF4\x64\xA3\x00\x00\x00\x00\x8B\x75"),
         xorstr_("xxxxxx????xxxxxxxxxxxxxx????xxxxxxxxxxxxxxxxxxx"));
     if (callAddDebugHook != NULL)
     {
-       LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to AddDebugHook!\n"));
-	   if (!DbgHook) HWBP::InstallHWBP((DWORD)callAddDebugHook, (DWORD)&AddDebugHook);
+       if (!DbgHook && mirage.hwbp_hooking != HookingType::IAT)
+       {
+           HWBP::InstallHWBP((DWORD)callAddDebugHook, (DWORD)&AddDebugHook);
+           LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to AddDebugHook!\n"));
+       }
     }
 	else LogInFile(LOG_NAME, xorstr_("[ERROR] Failed to find address from signature to AddDebugHook!\n"));
     callRemoveDebugHook = (ptrRemoveDebugHook)scan.FindPattern(xorstr_("client.dll"),
@@ -117,11 +333,16 @@ void SignatureScanner()
         xorstr_("xxxxxx????xxxxxxxxxxxxxx????xxxxxxxxxxxxxxxxxx"));
     if (sendMTAChat) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to ExecCommand!\n"));
 	else LogInFile(LOG_NAME, xorstr_("[ERROR] Failed to find address from signature to ExecCommand!\n"));
-    callStartGame = (ptrStartGame)scan.FindPatternIDA(xorstr_("client.dll"),
-        xorstr_("55 8B EC 6A FF 68 ? ? ? ? 64 A1 ? ? ? ? 50 B8 ? ? ? ? E8 ? ? ? ? A1 ? ? ? ? 33 C5 89 45 F0 56 57 50 8D 45 F4 64 A3 ? ? ? ? 89 8D ? ? ? ? 8B 45 08 89 85 ? ? ? ? 8B 45 0C 89 85 ? ? ? ? 8B 45 10"));
+    callStartGame = (ptrStartGame)scan.FindCallPattern(xorstr_("client.dll"),
+        xorstr_("E8 ? ? ? ? EB ? 8B 0D ? ? ? ? ? ? 8B 40 ? FF D0 68"));
+	if (mirage.fork_version == ForkVersion::FORK_VERSION_1_5)
+	{
+		callStartGame = (ptrStartGame)scan.FindCallPattern(xorstr_("client.dll"),
+			xorstr_("E8 ? ? ? ? 8D 4D A8 E8 ? ? ? ? EB 29"));
+	}
     if (callStartGame != nullptr)
     {
-		MakeJump((DWORD)callStartGame, (DWORD)&StartGame, gamestart_prologue, sizeof(gamestart_prologue));
+		//MakeJump((DWORD)callStartGame, (DWORD)&StartGame, gamestart_prologue, sizeof(gamestart_prologue));
         LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to StartGame!\n"));
     }
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for StartGame.\n"));
@@ -173,6 +394,7 @@ void SignatureScanner()
         if (callLuaLoadBuffer != nullptr)
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to Lua Engine!\n"));
+            if (mirage.hwbp_hooking == HookingType::IAT) hookIATwithName(xorstr_("client.dll"), xorstr_("luaL_loadbuffer"), (DWORD)&hkLuaLoadBuffer, (DWORD*)&callLuaLoadBuffer);
             if (mirage.hwbp_hooking == HookingType::INLINE_JUMP) MakeJump((DWORD)callLuaLoadBuffer, (DWORD)&hkLuaLoadBuffer, loadbuff_prologue, sizeof(loadbuff_prologue));
             if (mirage.hwbp_hooking == HookingType::HWBP_HOOK) HWBP::InstallHWBP((DWORD)callLuaLoadBuffer, (DWORD)&hkLuaLoadBuffer);
         }
@@ -184,9 +406,23 @@ void SignatureScanner()
         if (call_lua_load != nullptr)
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to Lua Engine!\n"));
+            if (mirage.hwbp_hooking == HookingType::IAT) hookIATwithName(xorstr_("client.dll"), xorstr_("luaL_load"), (DWORD)&lua_load, (DWORD*)&call_lua_load);
             if (mirage.hwbp_hooking == HookingType::INLINE_JUMP) MakeJump((DWORD)call_lua_load, (DWORD)&lua_load, load_prologue, sizeof(load_prologue));
             if (mirage.hwbp_hooking == HookingType::HWBP_HOOK) HWBP::InstallHWBP((DWORD)call_lua_load, (DWORD)&lua_load);
         }
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a sig for Lua Engine.\n"));
+    }
+    if (mirage.fuck_dbg_hooks == FuckDbgHooksMode::STEALTH_MODE)
+    {
+        callIsNameAllowed = (ptrIsNameAllowed)scan.FindCallPattern(xorstr_("client.dll"),
+        xorstr_("E8 ? ? ? ? 84 C0 0F 84 ? ? ? ? C7 45 ? ? ? ? ? C7 45 ? ? ? ? ? C7 45 ? ? ? ? ? 6A"));
+        if (callIsNameAllowed != nullptr)
+        {
+            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to IsNameAllowed!\n"));
+            MH_RemoveHook(callIsNameAllowed);
+            MH_CreateHook(callIsNameAllowed, IsNameAllowed, reinterpret_cast<LPVOID*>(&callIsNameAllowed));
+            MH_EnableHook(MH_ALL_HOOKS);
+        }
+        else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a sig for IsNameAllowed!\n"));
     }
 }

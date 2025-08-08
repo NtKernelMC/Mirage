@@ -99,6 +99,8 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>C:\Users\RAID\source\repos\Mirage\MirageAgent\magic_enum;C:\Users\RAID\source\repos\Mirage\MirageAgent\NetAPI\utils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <CompileAs>CompileAsCpp</CompileAs>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -150,14 +152,38 @@
   <ItemGroup>
     <ClInclude Include="AnticheatBypass.h" />
     <ClInclude Include="CShooting.h" />
+    <ClInclude Include="CVector.h" />
+    <ClInclude Include="CVector2D.h" />
     <ClInclude Include="HWBP.h" />
     <ClInclude Include="HWID.h" />
+    <ClInclude Include="IAT.h" />
     <ClInclude Include="LuaInjector.h" />
     <ClInclude Include="MD5.h" />
+    <ClInclude Include="NetAPI\bitstream.h" />
+    <ClInclude Include="NetAPI\CNet.h" />
+    <ClInclude Include="NetAPI\CNetHTTPDownloadManagerInterface.h" />
+    <ClInclude Include="NetAPI\Common.h" />
+    <ClInclude Include="NetAPI\net_common.h" />
+    <ClInclude Include="NetAPI\packetenums.h" />
+    <ClInclude Include="NetAPI\Packets.h" />
+    <ClInclude Include="NetAPI\SyncStructures.h" />
+    <ClInclude Include="NetAPI\utils\SharedUtil.Defines.h" />
+    <ClInclude Include="NetAPI\utils\SharedUtil.Game.h" />
+    <ClInclude Include="NetAPI\utils\SharedUtil.Game.hpp" />
+    <ClInclude Include="NetAPI\utils\SharedUtil.IntTypes.h" />
+    <ClInclude Include="NetAPI\utils\SharedUtil.Map.h" />
+    <ClInclude Include="NetAPI\utils\SharedUtil.Misc.h" />
+    <ClInclude Include="NetAPI\utils\SharedUtil.Misc.hpp" />
+    <ClInclude Include="NetAPI\utils\SString.h" />
+    <ClInclude Include="NetAPI\utils\SString.hpp" />
+    <ClInclude Include="NetAPI\utils\WString.h" />
+    <ClInclude Include="NetAPI\utils\WString.hpp" />
     <ClInclude Include="Registry.h" />
     <ClInclude Include="ScriptConfig.h" />
     <ClInclude Include="Signatures.h" />
+    <ClInclude Include="sigscan.h" />
     <ClInclude Include="Utils.h" />
+    <ClInclude Include="WepTypes.h" />
     <ClInclude Include="XorCryptor.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

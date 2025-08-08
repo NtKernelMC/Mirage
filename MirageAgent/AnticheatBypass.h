@@ -4,14 +4,38 @@ namespace LegacyBypass
     ptrSendPacket callSendPacket = nullptr;
     bool __fastcall SendPacket(void* ECX, void* EDX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering)
     {
-		RestorePrologue((DWORD)callSendPacket, packet_prologue, sizeof(packet_prologue));
-        if (ucPacketID == 91)
-        {
-            MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
-            return true;
-        }
+		CNetAPI = ECX;
+		g_pNet = (CNet*)ECX;
+		if (ucPacketID == 91) return true;
+		if (ucPacketID == PACKET_ID_VOICE_DATA && cursed_voice)
+		{
+			NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+
+			if (pBitStream)
+			{
+				unsigned short uiBytesWritten = 34900;
+				static char bufTempOutput[34900];
+				static bool once_writer = false;
+				
+				if (!once_writer)
+				{
+					for (int i = 0; i < 34900; i++)
+					{
+						bufTempOutput[i] = 120;
+					}
+
+					once_writer = true;
+				}
+				pBitStream->Write(uiBytesWritten);
+				pBitStream->Write((char*)bufTempOutput, uiBytesWritten);
+
+				callSendPacket(ECX, PACKET_ID_VOICE_DATA, pBitStream, PACKET_PRIORITY_LOW, PACKET_RELIABILITY_RELIABLE_ORDERED, PACKET_ORDERING_VOICE);
+				g_pNet->DeallocateNetBitStream(pBitStream);
+
+			}
+			return true;
+		}
         bool rslt = callSendPacket(ECX, ucPacketID, bitStream, packetPriority, packetReliability, packetOrdering);
-        MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
         return rslt;
     }
     void EvadeAnticheat()
@@ -25,7 +49,9 @@ namespace LegacyBypass
             if (callSendPacket != nullptr)
             {
                 LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to SendPacket!\n"));
-				MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
+				MH_RemoveHook(callSendPacket);
+				MH_CreateHook(callSendPacket, &SendPacket, reinterpret_cast<LPVOID*>(&callSendPacket));
+				MH_EnableHook(MH_ALL_HOOKS);
 			}
 			else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for SendPacket.\n"));
         }
@@ -37,7 +63,11 @@ namespace ModernBypass
     ptrSendPacket callSendPacket = nullptr;
     bool __fastcall SendPacket(void* ECX, void* EDX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering)
     {
+		CNetAPI = ECX;
+		g_pNet = (CNet*)ECX;
         RestorePrologue((DWORD)callSendPacket, packet_prologue, sizeof(packet_prologue));
+		auto color_name = magic_enum::enum_name((ePacketID)ucPacketID);
+		//LogInFile(LOG_NAME, xorstr_("PacketID: %d | PacketName: %s\n"), ucPacketID, color_name.data());
         if ((ucPacketID >= 91 && ucPacketID <= 94 && ucPacketID != 93) || ucPacketID == 34)
         {
             MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
@@ -47,6 +77,7 @@ namespace ModernBypass
         MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
         return rslt;
     }
+
 	// Netc hooks
 	typedef void(__thiscall* vpnbypass_t)(DWORD*, char);
 	vpnbypass_t vpnbypass = nullptr;
