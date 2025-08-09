@@ -83,7 +83,6 @@ void __fastcall SendBulletSyncFire(void* ECX, void* EDX, eWeaponType weaponType,
 {
     callSendBulletSyncFire(ECX, weaponType, vecStart, vecEnd, fDamage, ucHitZone, pRemoteDamagedPlayer);
 }
-static std::string kDumpDir{ xorstr_("DumpedHeap") };
 std::string utf8_to_cp1251_safe(const char* data, size_t len)
 {
     std::string out;
@@ -202,6 +201,7 @@ void __fastcall DecodeAndBuffer(void* ECX, void* EDX, char* pBuffer, unsigned in
 static std::vector<std::string> vecHooks =
 {
     xorstr_("addDebugHook"),
+    xorstr_("removeDbgHook"),
     xorstr_("triggerServerEvent"),
     xorstr_("triggerLatentServerEvent"),
     xorstr_("addEventHandler"),
@@ -353,44 +353,51 @@ void SignatureScanner()
         if (callIsChatBoxInputEnabled != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to IsChatBoxInputEnabled!\n"));
         else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for IsChatBoxInputEnabled.\n"));
     }
-    call_pushcclosure = (lua_pushcclosure)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_pushcclosure"));
+    callWriteCameraOrientation = (ptrWriteCameraOrientation)scan.FindPatternIDA(xorstr_("client.dll"),
+        xorstr_("53 8B DC 83 EC 08 83 E4 F8 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 6A FF 68 ? ? ? ? 64 A1 00 00 00 00 50 53 81 EC C0"));
+    if (callWriteCameraOrientation != nullptr)
+    {
+        LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to WriteCameraOrientation!\n"));
+    }
+    else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for WriteCameraOrientation.\n"));
+    call_pushcclosure = (lua_pushcclosure)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_pushcclosure"));
     if (call_pushcclosure != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_pushcclosure!\n"));
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_pushcclosure.\n"));
-    call_setfield = (lua_setfield)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_setfield"));
+    call_setfield = (lua_setfield)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_setfield"));
     if (call_setfield != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_setfield!\n"));
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_setfield.\n"));
-    call_pushboolean = (lua_pushboolean)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_pushboolean"));
+    call_pushboolean = (lua_pushboolean)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_pushboolean"));
     if (call_pushboolean != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_pushboolean!\n"));
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_pushboolean.\n"));
-    call_toboolean = (lua_toboolean)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_toboolean"));
+    call_toboolean = (lua_toboolean)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_toboolean"));
     if (call_toboolean != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_toboolean!\n"));
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for toboolean.\n"));
-    call_pushnumber = (lua_pushnumber)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_pushnumber"));
+    call_pushnumber = (lua_pushnumber)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_pushnumber"));
     if (call_pushnumber != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_pushnumber!\n"));
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_pushnumber.\n"));
-    call_tostring = (lua_tostring)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_tolstring"));
+    call_tostring = (lua_tostring)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_tolstring"));
     if (call_tostring != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_tostring!\n"));
-    call_pushstring = (lua_pushstring)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_pushstring"));
+    call_pushstring = (lua_pushstring)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_pushstring"));
     if (call_pushstring != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_pushstring!\n"));
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_pushstring.\n"));
-    call_lua_remove = (ptr_lua_remove)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_remove"));
+    call_lua_remove = (ptr_lua_remove)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_remove"));
     if (call_lua_remove != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_remove!\n"));
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_remove.\n"));
-	call_objlen = (lua_objlen)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_objlen"));
+	call_objlen = (lua_objlen)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_objlen"));
 	if (call_objlen != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_objlen!\n"));
 	else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_objlen.\n"));
-	call_rawgeti = (lua_rawgeti)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_rawgeti"));
+	call_rawgeti = (lua_rawgeti)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_rawgeti"));
 	if (call_rawgeti != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_rawgeti!\n"));
 	else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_rawgeti.\n"));
-	call_rawseti = (lua_rawseti)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_rawseti"));
+	call_rawseti = (lua_rawseti)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_rawseti"));
 	if (call_rawseti != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_rawseti!\n"));
 	else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_rawseti.\n"));
-	call_settop = (lua_settop)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_settop"));
+	call_settop = (lua_settop)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_settop"));
 	if (call_settop != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_settop!\n"));
 	else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_settop.\n"));
     if (mirage.injection_type == LuaInjectionType::METHOD_LUA_L_LOADBUFFER)
     {
-        callLuaLoadBuffer = (t_LuaLoadBuffer)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("luaL_loadbuffer"));
+        callLuaLoadBuffer = (t_LuaLoadBuffer)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("luaL_loadbuffer"));
         if (callLuaLoadBuffer != nullptr)
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to Lua Engine!\n"));
@@ -402,7 +409,7 @@ void SignatureScanner()
     }
     if (mirage.injection_type == LuaInjectionType::METHOD_LUA_L_LOAD)
     {
-        call_lua_load = (ptr_lua_load)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_load"));
+        call_lua_load = (ptr_lua_load)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_load"));
         if (call_lua_load != nullptr)
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to Lua Engine!\n"));

