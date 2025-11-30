@@ -40,21 +40,24 @@
 	   return true
 	end
 
-	getPedVoice("hideFunctionCall", true)
-	getPedVoice("setDbgHook", "preFunction", antiZZ, { "setPedWeaponSlot" } )
-	getPedVoice("hideFunctionCall", false)
+	function CrashPlayers()
+		getPedVoice("hideFunctionCall", true)
+		getPedVoice("setDbgHook", "preFunction", antiZZ, { "setPedWeaponSlot" } )
+		getPedVoice("hideFunctionCall", false)
 
-	local rslt = setRandomFirearmSlot() -- достаем оружие в зеленой зоне (должно уже быть у игрока)
-	if rslt then
-		local bad_val = 1000000000.0 -- крашим игроков вокруг через хуевую пулю
-		local ret = getPedVoice('sendBulletSync', bad_val, bad_val, bad_val, -bad_val, -bad_val, -bad_val)
-		outputChatBox('Пуля отправлена? ' .. tostring(ret))
+		local rslt = setRandomFirearmSlot() -- достаем оружие в зеленой зоне (должно уже быть у игрока)
+		if rslt then
+			local bad_val = 1000000000.0 -- крашим игроков вокруг через хуевую пулю
+			local ret = getPedVoice('sendBulletSync', bad_val, bad_val, bad_val, -bad_val, -bad_val, -bad_val)
+			outputChatBox('Пуля отправлена? ' .. tostring(ret))
+		end
+
+		getPedVoice("hideFunctionCall", true)
+		getPedVoice("removeDbgHook", "preFunction", antiZZ) -- тушим наш анти-зз
+		getPedVoice("hideFunctionCall", false)
+		setPedWeaponSlot(localPlayer, 0) -- ставим обратно на кулаки
 	end
-
-	getPedVoice("hideFunctionCall", true)
-	getPedVoice("removeDbgHook", "preFunction", antiZZ) -- тушим наш анти-зз
-	getPedVoice("hideFunctionCall", false)
-	setPedWeaponSlot(localPlayer, 0) -- ставим обратно на кулаки
+	bindKey("f2", "down", CrashPlayers)
 	```
 */
 #ifndef _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
@@ -79,6 +82,7 @@
 #include <iostream>
 #include <thread>
 #include <string>
+#include <shlobj_core.h>
 #include <unordered_set>
 #include <unordered_map>
 #include <array>
@@ -92,6 +96,7 @@
 #include "Registry.h"
 #include "HWBP.h"
 #include "HWID.h"
+#include <intrin.h>
 #include "MinHook.h"
 #include "CVector.h"
 #include "CVector2D.h"
@@ -99,6 +104,7 @@
 #include "magic_enum/include/magic_enum.hpp"
 #include "WepTypes.h"
 #include <winternl.h>
+#pragma comment(lib, "Shell32.lib")
 #pragma comment(lib, "ntdll.lib")
 #pragma comment(lib, "libMinHook.x86.lib")
 #pragma comment(lib, "Winmm.lib")
@@ -1349,4 +1355,446 @@ void Crasher()
 		}
 		Sleep(250);
 	}
+}
+typedef void(__cdecl* process_img_archive_t)(char* filename, int a2, int a3);
+process_img_archive_t g_original_process_img_archive = nullptr;
+
+typedef void* (__cdecl* IMG_DecryptFileData_t)(int context, char* outputBuffer, void* inputBuffer, size_t inputSize);
+IMG_DecryptFileData_t g_original_IMG_DecryptFileData = nullptr;
+
+typedef HANDLE(__stdcall* CreateFileA_t)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+CreateFileA_t g_original_CreateFileA = nullptr;
+
+typedef BOOL(__stdcall* ReadFile_t)(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
+ReadFile_t g_original_ReadFile = nullptr;
+
+typedef DWORD(__stdcall* SetFilePointer_t)(HANDLE, LONG, PLONG, DWORD);
+SetFilePointer_t g_original_SetFilePointer = nullptr;
+
+#define MAGIC_VER2 0x32524556
+#define MAGIC_VERF 0x46524556
+
+#pragma pack(push, 1)
+struct FileEntryV2
+{
+	uint32_t offset;
+	uint16_t size_sectors;
+	uint16_t size_bytes;
+	char name[24];
+};
+
+struct EnhancedFileEntry
+{
+	uint32_t offset;
+	uint16_t size_sectors;
+	uint16_t size_sectors_dup;
+	uint32_t full_size;
+	uint32_t flags;
+	char name[24];
+	char reserved[24];
+};
+#pragma pack(pop)
+
+struct FileTracker
+{
+	HANDLE handle;
+	std::string filepath;
+	uint64_t currentPosition;
+	bool isVehiclesImg;
+};
+
+struct VehiclesCapture
+{
+	bool active;
+	std::string filepath;
+	std::vector<uint8_t> originalData;
+	std::vector<uint8_t> decryptedData;
+	std::map<HANDLE, FileTracker> fileTrackers;
+	HANDLE vehiclesHandle;
+	uint64_t lastReadPosition;
+	uint64_t lastReadSize;
+	bool headerDecrypted;
+};
+
+VehiclesCapture g_capture;
+
+HANDLE __stdcall Hook_CreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode,
+	LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition,
+	DWORD dwFlagsAndAttributes, HANDLE hTemplateFile)
+{
+	HANDLE result = g_original_CreateFileA(lpFileName, dwDesiredAccess, dwShareMode,
+		lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+
+	if (result != INVALID_HANDLE_VALUE && lpFileName)
+	{
+		std::string path = lpFileName;
+		if (findStringIC(path.c_str(), "VEHICLES.IMG"))
+		{
+			g_capture.fileTrackers[result] = { result, path, 0, true };
+			g_capture.vehiclesHandle = result;
+			LogInFile(xorstr_("img_dump.log"),
+				xorstr_("[LOG] Opened VEHICLES.IMG, handle: 0x%X\n"), result);
+		}
+	}
+
+	return result;
+}
+
+DWORD __stdcall Hook_SetFilePointer(HANDLE hFile, LONG lDistanceToMove, PLONG lpDistanceToMoveHigh, DWORD dwMoveMethod)
+{
+	DWORD result = g_original_SetFilePointer(hFile, lDistanceToMove, lpDistanceToMoveHigh, dwMoveMethod);
+
+	auto it = g_capture.fileTrackers.find(hFile);
+	if (it != g_capture.fileTrackers.end() && it->second.isVehiclesImg)
+	{
+		uint64_t newPos = result;
+		if (lpDistanceToMoveHigh)
+			newPos |= ((uint64_t)*lpDistanceToMoveHigh << 32);
+
+		it->second.currentPosition = newPos;
+
+		LogInFile(xorstr_("img_dump.log"),
+			xorstr_("[LOG] SetFilePointer to: 0x%llX\n"), newPos);
+	}
+
+	return result;
+}
+
+BOOL __stdcall Hook_ReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesToRead,
+	LPDWORD lpNumberOfBytesRead, LPOVERLAPPED lpOverlapped)
+{
+	auto it = g_capture.fileTrackers.find(hFile);
+	if (it != g_capture.fileTrackers.end() && it->second.isVehiclesImg && g_capture.active)
+	{
+		g_capture.lastReadPosition = it->second.currentPosition;
+		g_capture.lastReadSize = nNumberOfBytesToRead;
+
+		LogInFile(xorstr_("img_dump.log"),
+			xorstr_("[LOG] Reading %d bytes from position 0x%llX\n"),
+			nNumberOfBytesToRead, g_capture.lastReadPosition);
+	}
+
+	BOOL result = g_original_ReadFile(hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, lpOverlapped);
+
+	if (it != g_capture.fileTrackers.end() && it->second.isVehiclesImg)
+	{
+		it->second.currentPosition += *lpNumberOfBytesRead;
+	}
+
+	return result;
+}
+
+void* __cdecl Hook_IMG_DecryptFileData(int context, char* outputBuffer, void* inputBuffer, size_t inputSize)
+{
+	void* result = g_original_IMG_DecryptFileData(context, outputBuffer, inputBuffer, inputSize);
+
+	if (g_capture.active && outputBuffer && inputSize > 0)
+	{
+		uint64_t writePosition = g_capture.lastReadPosition;
+
+		if (writePosition + inputSize <= g_capture.decryptedData.size())
+		{
+			memcpy(g_capture.decryptedData.data() + writePosition, outputBuffer, inputSize);
+
+			LogInFile(xorstr_("img_dump.log"),
+				xorstr_("[LOG] Decrypted %d bytes at file offset 0x%llX\n"),
+				inputSize, writePosition);
+
+			if (!g_capture.headerDecrypted && writePosition == 0)
+			{
+				uint32_t magic = *(uint32_t*)outputBuffer;
+				if (magic == MAGIC_VER2 || magic == MAGIC_VERF || magic == 0xFFFFFFFF)
+				{
+					g_capture.headerDecrypted = true;
+					LogInFile(xorstr_("img_dump.log"),
+						xorstr_("[LOG] Header decrypted, magic: 0x%08X\n"), magic);
+				}
+			}
+		}
+		else
+		{
+			LogInFile(xorstr_("img_dump.log"),
+				xorstr_("[LOG] WARNING: Decrypt position 0x%llX + size %d exceeds file size %d\n"),
+				writePosition, inputSize, g_capture.decryptedData.size());
+		}
+	}
+
+	return result;
+}
+
+void LoadOriginalFile(const std::string& filepath)
+{
+	FILE* f = fopen(filepath.c_str(), "rb");
+	if (!f)
+	{
+		LogInFile(xorstr_("img_dump.log"),
+			xorstr_("[LOG] Failed to open original file: %s\n"), filepath.c_str());
+		return;
+	}
+
+	fseek(f, 0, SEEK_END);
+	size_t fileSize = ftell(f);
+	fseek(f, 0, SEEK_SET);
+
+	g_capture.originalData.resize(fileSize);
+	g_capture.decryptedData.resize(fileSize);
+
+	fread(g_capture.originalData.data(), 1, fileSize, f);
+	fclose(f);
+
+	memcpy(g_capture.decryptedData.data(), g_capture.originalData.data(), fileSize);
+
+	LogInFile(xorstr_("img_dump.log"),
+		xorstr_("[LOG] Loaded original file: %s (size: %d bytes)\n"),
+		filepath.c_str(), fileSize);
+}
+
+void SaveDecryptedFile()
+{
+	if (g_capture.decryptedData.empty())
+	{
+		LogInFile(xorstr_("img_dump.log"),
+			xorstr_("[LOG] No data to save\n"));
+		return;
+	}
+
+	std::string outputPath = g_capture.filepath;
+	size_t pos = outputPath.rfind(".img");
+	if (pos != std::string::npos)
+		outputPath.replace(pos, 4, "_decrypted.img");
+	else
+		outputPath += "_decrypted";
+
+	FILE* output = fopen(outputPath.c_str(), "wb");
+	if (output)
+	{
+		fwrite(g_capture.decryptedData.data(), 1, g_capture.decryptedData.size(), output);
+		fclose(output);
+
+		LogInFile(xorstr_("img_dump.log"),
+			xorstr_("[LOG] Saved decrypted IMG to: %s (size: %d bytes)\n"),
+			outputPath.c_str(), g_capture.decryptedData.size());
+	}
+
+	uint32_t magic = *(uint32_t*)g_capture.decryptedData.data();
+	uint32_t fileCount = *(uint32_t*)(g_capture.decryptedData.data() + 4);
+
+	std::string listPath = outputPath + ".txt";
+	FILE* listFile = fopen(listPath.c_str(), "w");
+	if (listFile)
+	{
+		fprintf(listFile, "Decrypted IMG Archive\n");
+		fprintf(listFile, "Original: %s\n", g_capture.filepath.c_str());
+		fprintf(listFile, "Size: %d bytes\n", g_capture.decryptedData.size());
+		fprintf(listFile, "Magic: 0x%08X\n", magic);
+		fprintf(listFile, "Files: %d\n\n", fileCount);
+
+		if (magic == MAGIC_VER2 && fileCount > 0 && fileCount < 10000)
+		{
+			FileEntryV2* entries = (FileEntryV2*)(g_capture.decryptedData.data() + 8);
+			for (uint32_t i = 0; i < fileCount; i++)
+			{
+				fprintf(listFile, "%4d: %-24s offset=0x%08X sectors=%d bytes=%d\n",
+					i, entries[i].name, entries[i].offset * 2048,
+					entries[i].size_sectors, entries[i].size_bytes);
+			}
+		}
+		else if (magic == MAGIC_VERF && fileCount > 0 && fileCount < 10000)
+		{
+			EnhancedFileEntry* entries = (EnhancedFileEntry*)(g_capture.decryptedData.data() + 8);
+			for (uint32_t i = 0; i < fileCount; i++)
+			{
+				fprintf(listFile, "%4d: %-24s offset=0x%08X sectors=%d size=%d flags=0x%08X\n",
+					i, entries[i].name, entries[i].offset * 2048,
+					entries[i].size_sectors, entries[i].full_size, entries[i].flags);
+			}
+		}
+		else if (magic == 0xFFFFFFFF)
+		{
+			fprintf(listFile, "Old format IMG (no file table)\n");
+		}
+
+		fclose(listFile);
+	}
+}
+
+void ExtractFiles()
+{
+	uint32_t magic = *(uint32_t*)g_capture.decryptedData.data();
+	uint32_t fileCount = *(uint32_t*)(g_capture.decryptedData.data() + 4);
+
+	if (fileCount == 0 || fileCount > 10000)
+		return;
+
+	std::string baseDir = g_capture.filepath;
+	size_t pos = baseDir.rfind(".img");
+	if (pos != std::string::npos)
+		baseDir.replace(pos, 4, "_extracted");
+	else
+		baseDir += "_extracted";
+
+	CreateDirectoryA(baseDir.c_str(), NULL);
+
+	LogInFile(xorstr_("img_dump.log"),
+		xorstr_("[LOG] Extracting %d files to: %s\n"), fileCount, baseDir.c_str());
+
+	if (magic == MAGIC_VER2)
+	{
+		FileEntryV2* entries = (FileEntryV2*)(g_capture.decryptedData.data() + 8);
+
+		for (uint32_t i = 0; i < fileCount; i++)
+		{
+			uint32_t fileOffset = entries[i].offset * 2048;
+			uint32_t fileSize = entries[i].size_sectors * 2048;
+
+			if (entries[i].size_bytes > 0)
+				fileSize = entries[i].size_bytes;
+
+			if (fileOffset + fileSize <= g_capture.decryptedData.size())
+			{
+				std::string fileName = baseDir + "\\" + entries[i].name;
+				FILE* f = fopen(fileName.c_str(), "wb");
+				if (f)
+				{
+					fwrite(g_capture.decryptedData.data() + fileOffset, 1, fileSize, f);
+					fclose(f);
+				}
+			}
+		}
+	}
+	else if (magic == MAGIC_VERF)
+	{
+		EnhancedFileEntry* entries = (EnhancedFileEntry*)(g_capture.decryptedData.data() + 8);
+
+		for (uint32_t i = 0; i < fileCount; i++)
+		{
+			uint32_t fileOffset = entries[i].offset * 2048;
+			uint32_t fileSize = entries[i].full_size;
+
+			if (fileSize == 0)
+				fileSize = entries[i].size_sectors * 2048;
+
+			if (fileOffset + fileSize <= g_capture.decryptedData.size())
+			{
+				std::string fileName = baseDir + "\\" + entries[i].name;
+				FILE* f = fopen(fileName.c_str(), "wb");
+				if (f)
+				{
+					fwrite(g_capture.decryptedData.data() + fileOffset, 1, fileSize, f);
+					fclose(f);
+				}
+			}
+		}
+	}
+
+	LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] Extraction complete\n"));
+}
+
+void __cdecl Hook_process_img_archive(char* filename, int a2, int a3)
+{
+	if (filename && findStringIC(filename, "VEHICLES.IMG"))
+	{
+		LogInFile(xorstr_("img_dump.log"),
+			xorstr_("[LOG] Processing: %s\n"), filename);
+
+		g_capture.active = true;
+		g_capture.filepath = filename;
+		g_capture.headerDecrypted = false;
+		g_capture.lastReadPosition = 0;
+		g_capture.lastReadSize = 0;
+
+		LoadOriginalFile(filename);
+	}
+
+	g_original_process_img_archive(filename, a2, a3);
+
+	if (g_capture.active)
+	{
+		g_capture.active = false;
+
+		LogInFile(xorstr_("img_dump.log"),
+			xorstr_("[LOG] Processing complete\n"));
+
+		SaveDecryptedFile();
+		ExtractFiles();
+
+		g_capture.originalData.clear();
+		g_capture.decryptedData.clear();
+		g_capture.fileTrackers.clear();
+	}
+}
+
+bool InstallFastmanHooks()
+{
+	std::wstring lg_path = mapped_image_dir + xorstr_(L"\\img_dump.log");
+	DeleteFileW(lg_path.c_str());
+
+	if (MH_Initialize() != MH_OK && MH_Initialize() != MH_ERROR_ALREADY_INITIALIZED)
+	{
+		LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] Failed to initialize MinHook\n"));
+		return false;
+	}
+
+	SigScan scan;
+	DWORD processImgAddr = scan.FindCallPattern(xorstr_("$fastman92limitAdjuster.asi"),
+		xorstr_("E8 ? ? ? ? 8B 55 ? 83 C4 ? 83 FA ? 72 ? 8B 4D ? 42 8B C1 81 FA ? ? ? ? 72 ? 8B 49 ? 83 C2 ? 2B C1 83 C0 ? 83 F8 ? 0F 87"));
+
+	if (processImgAddr == 0)
+	{
+		LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] Failed to find process_img_archive\n"));
+		return false;
+	}
+
+	DWORD decryptAddr = scan.FindCallPattern(xorstr_("$fastman92limitAdjuster.asi"),
+		xorstr_("E8 ? ? ? ? 56 57 FF 75"));
+
+	if (decryptAddr == 0)
+	{
+		LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] Failed to find IMG_DecryptFileData\n"));
+		return false;
+	}
+
+	if (MH_CreateHook((LPVOID)processImgAddr, &Hook_process_img_archive,
+		(LPVOID*)&g_original_process_img_archive) != MH_OK)
+	{
+		LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] Failed to create process_img hook\n"));
+		return false;
+	}
+
+	if (MH_CreateHook((LPVOID)decryptAddr, &Hook_IMG_DecryptFileData,
+		(LPVOID*)&g_original_IMG_DecryptFileData) != MH_OK)
+	{
+		LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] Failed to create decrypt hook\n"));
+		return false;
+	}
+
+	if (MH_CreateHook(&CreateFileA, &Hook_CreateFileA,
+		(LPVOID*)&g_original_CreateFileA) != MH_OK)
+	{
+		LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] Failed to create CreateFileA hook\n"));
+		return false;
+	}
+
+	if (MH_CreateHook(&ReadFile, &Hook_ReadFile,
+		(LPVOID*)&g_original_ReadFile) != MH_OK)
+	{
+		LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] Failed to create ReadFile hook\n"));
+		return false;
+	}
+
+	if (MH_CreateHook(&SetFilePointer, &Hook_SetFilePointer,
+		(LPVOID*)&g_original_SetFilePointer) != MH_OK)
+	{
+		LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] Failed to create SetFilePointer hook\n"));
+		return false;
+	}
+
+	if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK)
+	{
+		LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] Failed to enable hooks\n"));
+		return false;
+	}
+
+	LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] All hooks installed successfully!\n"));
+	return true;
 }

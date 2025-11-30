@@ -26,7 +26,10 @@ void AsyncThread()
         EnsureDumpDirectory();
         delete reg;
     }
-    MH_Initialize();
+    MH_Initialize(); 
+	//std::wstring lg_path = mapped_image_dir + xorstr_(L"\\img_dump.log");
+	//DeleteFileW(lg_path.c_str()); // удаляем старый лог
+    //InstallFastmanHooks();
 	callExitProcess = (ptrExitProcess)GetProcAddress(GetModuleHandleA(xorstr_("kernel32.dll")), xorstr_("ExitProcess"));
 	if (callExitProcess != nullptr)
 	{

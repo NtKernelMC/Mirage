@@ -287,7 +287,7 @@ void SignatureScanner()
         MH_EnableHook(MH_ALL_HOOKS);
     }
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for getPedVoice.\n"));
-    callDecodeAndBuffer = (ptrDecodeAndBuffer)scan.FindPatternIDA(xorstr_("client.dll"),
+    /*callDecodeAndBuffer = (ptrDecodeAndBuffer)scan.FindPatternIDA(xorstr_("client.dll"),
         xorstr_("55 8B EC 6A FF 68 ? ? ? ? 64 A1 00 00 00 00 50 81 EC 34 08"));
     if (callDecodeAndBuffer != nullptr)
     {
@@ -296,7 +296,7 @@ void SignatureScanner()
         MH_CreateHook(callDecodeAndBuffer, DecodeAndBuffer, reinterpret_cast<LPVOID*>(&callDecodeAndBuffer));
         MH_EnableHook(MH_ALL_HOOKS);
     }
-    else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for DecodeAndBuffer.\n"));
+    else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for DecodeAndBuffer.\n"));*/
     /*callSendBulletSyncFire = (ptrSendBulletSyncFire)scan.FindPattern(xorstr_("client.dll"),
         xorstr_("\x55\x8B\xEC\x56\x8B\xF1\x8B\x00\x00\x00\x00\x00\x57"),
         xorstr_("xxxxxxx?????x")); // SendBulletSyncFire

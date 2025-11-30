@@ -59,24 +59,24 @@ namespace LegacyBypass
 };
 namespace ModernBypass
 {
-    typedef bool(__thiscall* ptrSendPacket)(void* ECX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering);
-    ptrSendPacket callSendPacket = nullptr;
-    bool __fastcall SendPacket(void* ECX, void* EDX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering)
-    {
+	typedef bool(__thiscall* ptrSendPacket)(void* ECX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering);
+	ptrSendPacket callSendPacket = nullptr;
+	bool __fastcall SendPacket(void* ECX, void* EDX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering)
+	{
 		CNetAPI = ECX;
 		g_pNet = (CNet*)ECX;
-        RestorePrologue((DWORD)callSendPacket, packet_prologue, sizeof(packet_prologue));
+		RestorePrologue((DWORD)callSendPacket, packet_prologue, sizeof(packet_prologue));
 		auto color_name = magic_enum::enum_name((ePacketID)ucPacketID);
 		//LogInFile(LOG_NAME, xorstr_("PacketID: %d | PacketName: %s\n"), ucPacketID, color_name.data());
-        if ((ucPacketID >= 91 && ucPacketID <= 94 && ucPacketID != 93) || ucPacketID == 34)
-        {
-            MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
-            return true;
-        }
-        bool rslt = callSendPacket(ECX, ucPacketID, bitStream, packetPriority, packetReliability, packetOrdering);
-        MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
-        return rslt;
-    }
+		if ((ucPacketID >= 91 && ucPacketID <= 94 && ucPacketID != 93) || ucPacketID == 34)
+		{
+			MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
+			return true;
+		}
+		bool rslt = callSendPacket(ECX, ucPacketID, bitStream, packetPriority, packetReliability, packetOrdering);
+		MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
+		return rslt;
+	}
 
 	// Netc hooks
 	typedef void(__thiscall* vpnbypass_t)(DWORD*, char);
@@ -86,6 +86,8 @@ namespace ModernBypass
 	bool __fastcall hkIsNotViolationCode(void* ECX, void*, unsigned int a2) { return true; }
 	void __fastcall hkAcSecurityViolationKick(void* ECX, void*) {}
 	int __fastcall hkSendClientKick(void* ECX, void*, char arg) { return 1; }
+	typedef void(__cdecl* ptrSendReport)(int reportId, std::string* text, int size, int a2, int a3);
+	ptrSendReport callSendReport = nullptr;
 	void __cdecl hkSendReport(int reportId, std::string* text, int size, int a2, int a3) { return; }
 	void __fastcall hkSetClientKick(void* ECX, void*, void** args, void** reason, bool a4, int a5) { return; }
 	void __fastcall hkVfB00_Z00Scanner(int ECX, int, int a3) { return; }
@@ -153,11 +155,11 @@ namespace ModernBypass
 		}
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #4.\n"));
 
-		target = reinterpret_cast<LPVOID>(scan.FindPatternIDA(xorstr_("netc.dll"),
+		callSendReport = (ptrSendReport)(scan.FindPatternIDA(xorstr_("netc.dll"),
 			xorstr_("55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 51 56 A1 ? ? ? ? 33 C5 50 8D 45 ? 64 A3 ? ? ? ? A1 ? ? ? ? 85 C0 75 ? 68 ? ? ? ? E8 ? ? ? ? 8B F0 33 C0 68 ? ? ? ? 83 FE ? 8B CE 6A ? 0F 44 C8 51 E8 ? ? ? ? 83 C4 ? 89 75 ? C7 45 ? ? ? ? ? 85 F6 74 ? 8B CE E8 ? ? ? ? EB ? 33 C0 C7 45 ? ? ? ? ? A3 ? ? ? ? FF 75 ? 8B C8 FF 75 ? FF 75 ? FF 75 ? FF 75 ? E8 ? ? ? ? FF 05")));
-		if (target)
+		if (callSendReport)
 		{
-			MH_CreateHook(target, &hkSendReport, nullptr);
+			MH_CreateHook(callSendReport, &hkSendReport, nullptr);
 			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to ByPass Component #5!\n"));
 		}
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #5.\n"));
