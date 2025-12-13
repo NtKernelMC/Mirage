@@ -81,6 +81,16 @@ typedef void(__thiscall* ptrSendBulletSyncFire)(void* ECX, eWeaponType weaponTyp
 ptrSendBulletSyncFire callSendBulletSyncFire = nullptr;
 void __fastcall SendBulletSyncFire(void* ECX, void* EDX, eWeaponType weaponType, CVector& vecStart, CVector& vecEnd, float fDamage, BYTE ucHitZone, void* pRemoteDamagedPlayer)
 {
+    if (weaponType == 34)
+    {
+        CVector vecDir = vecStart - vecEnd;
+        float fLen = vecDir.Length();
+        if (fLen > 0.0f)
+        {
+            vecDir /= fLen;
+            vecStart += vecDir * 100.0f;
+        }
+    }
     callSendBulletSyncFire(ECX, weaponType, vecStart, vecEnd, fDamage, ucHitZone, pRemoteDamagedPlayer);
 }
 std::string utf8_to_cp1251_safe(const char* data, size_t len)
@@ -297,9 +307,8 @@ void SignatureScanner()
         MH_EnableHook(MH_ALL_HOOKS);
     }
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for DecodeAndBuffer.\n"));*/
-    /*callSendBulletSyncFire = (ptrSendBulletSyncFire)scan.FindPattern(xorstr_("client.dll"),
-        xorstr_("\x55\x8B\xEC\x56\x8B\xF1\x8B\x00\x00\x00\x00\x00\x57"),
-        xorstr_("xxxxxxx?????x")); // SendBulletSyncFire
+    /*callSendBulletSyncFire = (ptrSendBulletSyncFire)scan.FindPatternIDA(xorstr_("client.dll"),
+    xorstr_("55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? 56 57 A1 ? ? ? ? 33 C5 50 8D 45 ? 64 A3 ? ? ? ? 8B F9 6A")); // SendBulletSyncFire
     if (callSendBulletSyncFire != nullptr)
     {
         LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to SendBulletSyncFire!\n"));

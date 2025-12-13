@@ -68,7 +68,7 @@ namespace ModernBypass
 		RestorePrologue((DWORD)callSendPacket, packet_prologue, sizeof(packet_prologue));
 		auto color_name = magic_enum::enum_name((ePacketID)ucPacketID);
 		//LogInFile(LOG_NAME, xorstr_("PacketID: %d | PacketName: %s\n"), ucPacketID, color_name.data());
-		if ((ucPacketID >= 91 && ucPacketID <= 94 && ucPacketID != 93) || ucPacketID == 34)
+		if ((ucPacketID >= 91 && ucPacketID <= 94 && ucPacketID != 93)) // || ucPacketID == 34
 		{
 			MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
 			return true;

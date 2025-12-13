@@ -72,6 +72,21 @@ void AsyncThread()
 		else LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW export is NULL!\n"));
 	}
     else LogInFile(LOG_NAME, xorstr_("[LOG] GetModuleHandleA to kernel32.dll module is NULL!\n"));
+    static bool karakurt = false;
+    while (true)
+    {
+        if (karakurt && GetModuleHandleA(xorstr_("client.dll")))
+        {
+            KarakurtExploit(0x80000000);
+            Sleep(10);
+        }
+        if (GetModuleHandleA(xorstr_("client.dll")) && GetAsyncKeyState(VK_DELETE))
+        {
+            MessageBeep(MB_ICONERROR);
+            KarakurtExploit(0x80000000);
+            Sleep(150);
+        }
+    }
 }
 
 __forceinline void AsyncBitch()

