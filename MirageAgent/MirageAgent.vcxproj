@@ -151,6 +151,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AnticheatBypass.h" />
+    <ClInclude Include="BreakPoint.h" />
     <ClInclude Include="CShooting.h" />
     <ClInclude Include="CVector.h" />
     <ClInclude Include="CVector2D.h" />

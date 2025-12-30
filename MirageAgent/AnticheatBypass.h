@@ -1,62 +1,3 @@
-namespace LegacyBypass
-{
-    typedef bool(__thiscall* ptrSendPacket)(void* ECX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering);
-    ptrSendPacket callSendPacket = nullptr;
-    bool __fastcall SendPacket(void* ECX, void* EDX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering)
-    {
-		CNetAPI = ECX;
-		g_pNet = (CNet*)ECX;
-		if (ucPacketID == 91) return true;
-		if (ucPacketID == PACKET_ID_VOICE_DATA && cursed_voice)
-		{
-			NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
-
-			if (pBitStream)
-			{
-				unsigned short uiBytesWritten = 34900;
-				static char bufTempOutput[34900];
-				static bool once_writer = false;
-				
-				if (!once_writer)
-				{
-					for (int i = 0; i < 34900; i++)
-					{
-						bufTempOutput[i] = 120;
-					}
-
-					once_writer = true;
-				}
-				pBitStream->Write(uiBytesWritten);
-				pBitStream->Write((char*)bufTempOutput, uiBytesWritten);
-
-				callSendPacket(ECX, PACKET_ID_VOICE_DATA, pBitStream, PACKET_PRIORITY_LOW, PACKET_RELIABILITY_RELIABLE_ORDERED, PACKET_ORDERING_VOICE);
-				g_pNet->DeallocateNetBitStream(pBitStream);
-
-			}
-			return true;
-		}
-        bool rslt = callSendPacket(ECX, ucPacketID, bitStream, packetPriority, packetReliability, packetOrdering);
-        return rslt;
-    }
-    void EvadeAnticheat()
-    {
-        SigScan scan; 
-        if (callSendPacket == nullptr)
-        {
-            callSendPacket = (ptrSendPacket)scan.FindPattern(xorstr_("netc.dll"),
-                xorstr_("\x55\x8B\xEC\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x81\xEC\x00\x00\x00\x00\xA1\x00\x00\x00\x00\x33\xC5\x89\x45\xF0\x56\x57\x50\x8D\x45\xF4\x64\xA3\x00\x00\x00\x00\x8B\xF1\x89\xB5\x00\x00\x00\x00\x8B\x7D\x0C"),
-                xorstr_("xxxxxx????xx????xxx????x????xxxxxxxxxxxxx????xxxx????xxx")); // 1.5.9
-            if (callSendPacket != nullptr)
-            {
-                LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to SendPacket!\n"));
-				MH_RemoveHook(callSendPacket);
-				MH_CreateHook(callSendPacket, &SendPacket, reinterpret_cast<LPVOID*>(&callSendPacket));
-				MH_EnableHook(MH_ALL_HOOKS);
-			}
-			else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for SendPacket.\n"));
-        }
-    }
-};
 namespace ModernBypass
 {
 	typedef bool(__thiscall* ptrSendPacket)(void* ECX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering);
@@ -68,11 +9,11 @@ namespace ModernBypass
 		RestorePrologue((DWORD)callSendPacket, packet_prologue, sizeof(packet_prologue));
 		auto color_name = magic_enum::enum_name((ePacketID)ucPacketID);
 		//LogInFile(LOG_NAME, xorstr_("PacketID: %d | PacketName: %s\n"), ucPacketID, color_name.data());
-		if ((ucPacketID >= 91 && ucPacketID <= 94 && ucPacketID != 93)) // || ucPacketID == 34
+		/*if ((ucPacketID >= 91 && ucPacketID <= 94 && ucPacketID != 93) || ucPacketID == 34 || ucPacketID == 25)
 		{
 			MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
 			return true;
-		}
+		}*/
 		bool rslt = callSendPacket(ECX, ucPacketID, bitStream, packetPriority, packetReliability, packetOrdering);
 		MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
 		return rslt;
@@ -93,9 +34,221 @@ namespace ModernBypass
 	void __fastcall hkVfB00_Z00Scanner(int ECX, int, int a3) { return; }
 	void __fastcall hkSetClientKickNew(int ECX, int, char a2) { return; }
 	void __fastcall hkScanModuleIntegrity(int ECX, int, DWORD* a3) { return; }
+
+#pragma pack(push, 2)
+	struct RakNet_InternalPacket // sizeof=0x60
+	{
+		int32_t messageNumber;
+		int32_t sendSequenceId;
+		uint8_t flags0;
+		uint8_t _pad09[3];
+		uint32_t _unk0C;
+		uint32_t priority;
+		uint32_t reliability;
+		uint8_t orderingChannel;
+		uint8_t _pad19[3];
+		uint32_t orderingIndex;
+		uint16_t splitPacketId;
+		uint16_t _pad22;
+		uint32_t splitPacketIndex;
+		uint32_t splitPacketCount;
+		uint32_t _unk2C;
+		uint64_t creationTime;
+		uint8_t _unk38[20];
+		uint32_t dataBitLength;
+		void* data;
+		uint32_t _unk54;
+		void* poolPage;
+		uint32_t _unk5C;
+	};
+#pragma pack(pop)
+
+	typedef void(__thiscall* ptrRakNet_OutgoingPacketQueue_Push)(void* ECX, RakNet_InternalPacket** ppPkt);
+	ptrRakNet_OutgoingPacketQueue_Push callRakNet_OutgoingPacketQueue_Push = nullptr;
+	void __fastcall RakNet_OutgoingPacketQueue_Push(void* ECX, void *EDX, RakNet_InternalPacket** ppPkt)
+	{
+		if (ppPkt != nullptr)
+		{
+			RakNet_InternalPacket* internal_packet = *ppPkt;
+			if (internal_packet != nullptr)
+			{
+				if (internal_packet->splitPacketCount > 0)
+				{
+					LogInFile(LOG_NAME, xorstr_("[LOG] Split Count: %d | Split ID: %d!\n"), internal_packet->splitPacketCount, internal_packet->splitPacketId);
+				}
+			}
+		}
+		callRakNet_OutgoingPacketQueue_Push(ECX, ppPkt);
+	}
+	using ptrRakPeer_QueueBufferedPacket = int(__thiscall*)(void *ECX, void* payload, int bitLength, int priority,
+	int reliability, char orderingChannel, int targetIp, __int16 targetPort, char broadcast, int receiptNumber);
+	static ptrRakPeer_QueueBufferedPacket callRakPeer_QueueBufferedPacket = nullptr;
+
+	__forceinline unsigned short ReadU16LE(const BYTE* p)
+	{
+		return (unsigned short)p[0] | ((unsigned short)p[1] << 8);
+	}
+
+	__forceinline void ApplyD4Cipher(BYTE* data, size_t len)
+	{
+		for (size_t i = 0; i < len; ++i)
+		{
+			data[i] = (BYTE)(data[i] ^ (BYTE)i ^ 0xD4 ^ (1 << (i & 7)));
+		}
+	}
+
+	__forceinline bool IsSerialV15Char(BYTE c)
+	{
+		return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z');
+	}
+
+	__forceinline BYTE D1Encode(BYTE v15, unsigned int i)
+	{
+		return (BYTE)(v15 ^ i ^ 0xD1 ^ (1 << (i & 7)));
+	}
+
+	__forceinline BYTE D1Decode(BYTE b, unsigned int i)
+	{
+		return (BYTE)(b ^ i ^ 0xD1 ^ (1 << (i & 7)));
+	}
+
+	bool EncodePublicSerialV15(const std::string& v15, BYTE out[32])
+	{
+		if (v15.size() < 32) return false;
+
+		for (unsigned int i = 0; i < 32; ++i)
+		{
+			BYTE c = (BYTE)v15[i];
+			if (!IsSerialV15Char(c))
+				return false;
+
+			out[i] = D1Encode(c, i);
+		}
+		return true;
+	}
+
+	void DecodePublicSerialV15(const BYTE* enc, char out_v15[33])
+	{
+		for (unsigned int i = 0; i < 32; ++i)
+			out_v15[i] = (char)D1Decode(enc[i], i);
+		out_v15[32] = 0;
+	}
+
+	static std::string BytesToEscaped(const BYTE* p, size_t len)
+	{
+		std::ostringstream oss;
+		for (size_t i = 0; i < len; ++i)
+		{
+			unsigned char c = (unsigned char)p[i];
+			if (c >= 32 && c <= 126) // printable ASCII
+			{
+				if (c == '\\') oss << "\\\\";
+				else oss << (char)c;
+			}
+			else
+			{
+				oss << "\\x" << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+					<< (int)c << std::nouppercase << std::dec;
+			}
+		}
+		return oss.str();
+	}
+
+	static std::string BytesToSerialString(const BYTE* p, size_t len)
+	{
+		std::string s; s.reserve(len);
+		for (size_t i = 0; i < len; ++i)
+		{
+			BYTE c = p[i];
+			if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) s.push_back((char)c);
+		}
+		return s;
+	}
+
+	static void PrintPrivEncryptedDecryptedAsString(const BYTE* packet, size_t private_off, size_t private_len)
+	{
+		const BYTE* enc = packet + private_off;
+		BYTE tmp[64];
+		std::memcpy(tmp, enc, private_len);
+		ApplyD4Cipher(tmp, private_len); // XOR decrypt == encrypt
+		LogInFile(LOG_NAME, xorstr_("[RAKNET] Private Serial (OLD): %s\n"), BytesToEscaped(tmp, private_len));
+	}
+
+	int __fastcall RakPeer_QueueBufferedPacket(void* ECX, void* EDX, void* payload, int bitLength, int priority,
+	int reliability, char orderingChannel, int targetIp, __int16 targetPort, char broadcast, int receiptNumber)
+	{
+		unsigned int packetId = *(BYTE*)payload;
+		const unsigned int PACKET_RAK_ADDED_TO_ID = 99;
+
+		if (!packetId || packetId < PACKET_RAK_ADDED_TO_ID) return 1;
+		packetId -= PACKET_RAK_ADDED_TO_ID;
+		
+		if (packetId == 4 || packetId == 19)
+		{
+			std::string public_serial = xorstr_("8BD45B0D066614B558B483958F6B6371"); // v15
+			std::string private_serial = xorstr_("0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF");
+
+			const size_t totalBytes = (bitLength + 7) >> 3;
+			if (totalBytes < 3 + 32 + 2)
+			{
+				LogInFile(LOG_NAME, xorstr_("[ERROR] QueueBufferedPacket - Invalid packet size.\n"));
+				return 0;
+			}
+
+			BYTE* packet = (BYTE*)payload;
+			const size_t public_off = 3;
+			const size_t public_len = 32;
+
+			BYTE public_enc[32] = {};
+			if (!EncodePublicSerialV15(public_serial, public_enc))
+			{
+				LogInFile(LOG_NAME, xorstr_("[ERROR] QueueBufferedPacket - Invalid public serial (v15 mode).\n"));
+				return 0;
+			}
+			memcpy(packet + public_off, public_enc, 32);
+
+			const size_t private_len = 64;
+			size_t private_off = public_off + public_len + 2;
+
+			BYTE priv_enc[private_len];
+			memcpy(priv_enc, private_serial.data(), private_len);
+			ApplyD4Cipher(priv_enc, private_len);
+
+			PrintPrivEncryptedDecryptedAsString(packet, private_off, private_len);
+			memcpy(packet + private_off, priv_enc, private_len);
+
+			LogInFile(LOG_NAME, xorstr_("[RAKNET] PacketID: %d\n[RAKNET] Public Serial (v15): %s\n[RAKNET] Private Serial: %s\n"),
+				packetId, public_serial.c_str(), private_serial.c_str());
+		}
+
+		if ((packetId >= 91 && packetId <= 94) || (packetId == 34 || packetId == 25)) return 1;
+		return callRakPeer_QueueBufferedPacket(ECX, payload, bitLength, priority, reliability, orderingChannel, targetIp, targetPort, broadcast, receiptNumber);
+	}
+
 	void EvadeAnticheat()
 	{
 		SigScan scan; MessageBeep(MB_ICONASTERISK);
+		callRakPeer_QueueBufferedPacket = (ptrRakPeer_QueueBufferedPacket)scan.FindPatternIDA(xorstr_("netc.dll"),
+		xorstr_("55 8B EC 53 56 8B F1 57 8D 8E"));
+		if (callRakPeer_QueueBufferedPacket != nullptr)
+		{
+			MH_RemoveHook(callRakPeer_QueueBufferedPacket);
+			MH_CreateHook(callRakPeer_QueueBufferedPacket, &RakPeer_QueueBufferedPacket, reinterpret_cast<LPVOID*>(&callRakPeer_QueueBufferedPacket));
+			MH_EnableHook(MH_ALL_HOOKS);
+			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to RakPeer_QueueBufferedPacket!\n"));
+		}
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for RakPeer_QueueBufferedPacket.\n"));
+		/*callRakNet_OutgoingPacketQueue_Push = (ptrRakNet_OutgoingPacketQueue_Push)scan.FindPatternIDA(xorstr_("netc.dll"),
+		xorstr_("55 8B EC 56 8B F1 83 7E ? ? 75 ? 6A"));
+		if (callRakNet_OutgoingPacketQueue_Push != nullptr)
+		{
+			MH_RemoveHook(callRakNet_OutgoingPacketQueue_Push);
+			MH_CreateHook(callRakNet_OutgoingPacketQueue_Push, &RakNet_OutgoingPacketQueue_Push, reinterpret_cast<LPVOID*>(&callRakNet_OutgoingPacketQueue_Push));
+			MH_EnableHook(MH_ALL_HOOKS);
+			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to RakNet_OutgoingPacketQueue_Push!\n"));
+		}
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for RakNet_OutgoingPacketQueue_Push.\n"));*/
+		
 		if (callSendPacket == nullptr)
 		{
 			callSendPacket = (ptrSendPacket)scan.FindPattern(xorstr_("netc.dll"),
@@ -208,5 +361,68 @@ namespace ModernBypass
 			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to ByPass Component #10!\n"));
 		}
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #10.\n"));*/
+	}
+};
+namespace LegacyBypass
+{
+	typedef bool(__thiscall* ptrSendPacket)(void* ECX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering);
+	ptrSendPacket callSendPacket = nullptr;
+	bool __fastcall SendPacket(void* ECX, void* EDX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering)
+	{
+		CNetAPI = ECX;
+		g_pNet = (CNet*)ECX;
+		if (ucPacketID == 91) return true;
+		if (ucPacketID == PACKET_ID_VOICE_DATA && cursed_voice)
+		{
+			NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+
+			if (pBitStream)
+			{
+				unsigned short uiBytesWritten = 34900;
+				static char bufTempOutput[34900];
+				static bool once_writer = false;
+
+				if (!once_writer)
+				{
+					for (int i = 0; i < 34900; i++)
+					{
+						bufTempOutput[i] = 120;
+					}
+
+					once_writer = true;
+				}
+				pBitStream->Write(uiBytesWritten);
+				pBitStream->Write((char*)bufTempOutput, uiBytesWritten);
+
+				callSendPacket(ECX, PACKET_ID_VOICE_DATA, pBitStream, PACKET_PRIORITY_LOW, PACKET_RELIABILITY_RELIABLE_ORDERED, PACKET_ORDERING_VOICE);
+				g_pNet->DeallocateNetBitStream(pBitStream);
+
+			}
+			return true;
+		}
+		bool rslt = callSendPacket(ECX, ucPacketID, bitStream, packetPriority, packetReliability, packetOrdering);
+		return rslt;
+	}
+	void EvadeAnticheat()
+	{
+		SigScan scan;
+		if (callSendPacket == nullptr)
+		{
+			callSendPacket = (ptrSendPacket)scan.FindPattern(xorstr_("netc.dll"),
+				xorstr_("\x55\x8B\xEC\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x81\xEC\x00\x00\x00\x00\xA1\x00\x00\x00\x00\x33\xC5\x89\x45\xF0\x56\x57\x50\x8D\x45\xF4\x64\xA3\x00\x00\x00\x00\x8B\xF1\x89\xB5\x00\x00\x00\x00\x8B\x7D\x0C"),
+				xorstr_("xxxxxx????xx????xxx????x????xxxxxxxxxxxxx????xxxx????xxx")); // 1.5.9
+			if (callSendPacket != nullptr)
+			{
+				LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to SendPacket!\n"));
+				MH_RemoveHook(callSendPacket);
+				MH_CreateHook(callSendPacket, &SendPacket, reinterpret_cast<LPVOID*>(&callSendPacket));
+				MH_EnableHook(MH_ALL_HOOKS);
+			}
+			else
+			{
+				LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for SendPacket.\n"));
+				ModernBypass::EvadeAnticheat();
+			}
+		}
 	}
 };

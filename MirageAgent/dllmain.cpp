@@ -16,6 +16,8 @@ ptrExitProcess callExitProcess = nullptr;
 void __stdcall hkExitProcess(UINT uExitCode) {}
 void AsyncThread()
 {
+    MH_Initialize();
+    
     // Хуй найдут пидоры
     CEasyRegistry* reg = new CEasyRegistry(HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\MicrosoftUpdate_8246G", false);
     if (reg != nullptr)
@@ -26,10 +28,7 @@ void AsyncThread()
         EnsureDumpDirectory();
         delete reg;
     }
-    MH_Initialize(); 
-	//std::wstring lg_path = mapped_image_dir + xorstr_(L"\\img_dump.log");
-	//DeleteFileW(lg_path.c_str()); // удаляем старый лог
-    //InstallFastmanHooks();
+    //lua_scripts_dir = xorstr_(L"C:\\Users\\RAID\\source\\repos\\Karakurt\\Win32\\Debug");
 	callExitProcess = (ptrExitProcess)GetProcAddress(GetModuleHandleA(xorstr_("kernel32.dll")), xorstr_("ExitProcess"));
 	if (callExitProcess != nullptr)
 	{
@@ -72,20 +71,17 @@ void AsyncThread()
 		else LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW export is NULL!\n"));
 	}
     else LogInFile(LOG_NAME, xorstr_("[LOG] GetModuleHandleA to kernel32.dll module is NULL!\n"));
-    static bool karakurt = false;
+    static bool tarantul = false;
     while (true)
     {
-        if (karakurt && GetModuleHandleA(xorstr_("client.dll")))
-        {
-            KarakurtExploit(0x80000000);
-            Sleep(10);
-        }
+        //if (GetModuleHandleA(xorstr_("client.dll")) && tarantul) PlayerModInfoRealDoS();
         if (GetModuleHandleA(xorstr_("client.dll")) && GetAsyncKeyState(VK_DELETE))
         {
             MessageBeep(MB_ICONERROR);
-            KarakurtExploit(0x80000000);
+            SplitPacket(0x8000);
             Sleep(150);
         }
+        Sleep(10);
     }
 }
 

@@ -235,13 +235,30 @@ bool __fastcall IsNameAllowed(void* ECX, void* EDX, const char* szName, void* ev
     }
     return callIsNameAllowed(ECX, szName, eventHookList, bNameMustBeExplicitlyAllowed);
 }
+typedef bool(__thiscall* ptrCallEvent)(void* ECX, const char* szName, void* Arguments, bool bCallOnChildren);
+ptrCallEvent callCallEvent = nullptr;
+bool __fastcall CallEvent(void* ECX, void* EDX, const char* szName, void* Arguments, bool bCallOnChildren)
+{
+    if (findStringIC(szName, xorstr_("onExtensionUpdate")))
+    {
+        LogInFile(LOG_NAME, "RCE: %s\n", szName);
+    }
+    //LogInFile(LOG_NAME, "Handler: %s\n", szName);
+    return callCallEvent(ECX, szName, Arguments, bCallOnChildren);
+}
 void SignatureScanner()
 {
     SigScan scan;
 	if (mirage.fork_version == ForkVersion::FORK_VERSION_1_5) LegacyBypass::EvadeAnticheat();
     if (mirage.fork_version == ForkVersion::FORK_VERSION_1_6)
     {
-        ModernBypass::EvadeAnticheat(); DWORD oldProtect = 0x0;
+        static bool oncer = false;
+        if (!oncer)
+        {
+            ModernBypass::EvadeAnticheat();
+            oncer = true;
+        }
+        DWORD oldProtect = 0x0;
         DWORD patch_addr = (DWORD)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("E8 ? ? ? ? 83 C4 ? 46 3B F7 0F 8C"));
         if (patch_addr != NULL)
         {
@@ -273,7 +290,17 @@ void SignatureScanner()
         }
         else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for AC_ScanProcesses.\n"));
     }
-	
+    callCallEvent = (ptrCallEvent)scan.FindPattern(xorstr_("client.dll"),
+        xorstr_("\x55\x8B\xEC\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x83\xEC\x24\xA1\x00\x00\x00\x00\x33\xC5\x89\x45\xF0\x53\x56\x57\x50\x8D\x45\xF4\x64\xA3\x00\x00\x00\x00\x8B\xF1\xA1"),
+        xorstr_("xxxxxx????xxxxxxxxxxx????xxxxxxxxxxxxxxxxxxxxx"));
+    if (callCallEvent != nullptr)
+    {
+        LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to CallEvent!\n"));
+        MH_RemoveHook(callCallEvent);
+        MH_CreateHook(callCallEvent, &CallEvent, reinterpret_cast<LPVOID*>(&callCallEvent));
+        MH_EnableHook(MH_ALL_HOOKS);
+    }
+    else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for CallEvent.\n"));
     if (callProcessMessage == nullptr)
     {
         callProcessMessage = (ptrProcessMessage)scan.FindPattern(xorstr_("core.dll"),
