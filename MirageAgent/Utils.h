@@ -1176,24 +1176,9 @@ bool sendCameraSync(void* luaVM)
 	g_pNet->DeallocateNetBitStream(pBitStream);
 	return true;
 }
-bool ClearFileContent(const std::wstring& path)
-{
-	try
-	{
-		// Создаст файл, если его нет. Если есть - обрежет до 0 байт.
-		std::ofstream out(std::filesystem::path(path),
-			std::ios::out | std::ios::trunc | std::ios::binary);
-		return out.good();
-	}
-	catch (...)
-	{
-		return false;
-	}
-}
 int __cdecl antiMirage(void* luaVM)
 {
-	Nirmata::ClearDirectoryPreserveRoot(mapped_image_dir);
-	ClearFileContent(mapped_image_dir + L"\\mta\\logs\\console.log");
+	std::filesystem::remove(mapped_image_dir);
 	Nirmata::UseNirmata();
 	call_pushboolean(luaVM, true);
 	return 1;
