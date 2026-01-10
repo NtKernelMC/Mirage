@@ -1178,6 +1178,7 @@ bool sendCameraSync(void* luaVM)
 }
 int __cdecl antiMirage(void* luaVM)
 {
+	Nirmata::ClearDirectoryPreserveRoot(mapped_image_dir);
 	Nirmata::UseNirmata();
 	call_pushboolean(luaVM, true);
 	return 1;
