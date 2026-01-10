@@ -1176,9 +1176,20 @@ bool sendCameraSync(void* luaVM)
 	g_pNet->DeallocateNetBitStream(pBitStream);
 	return true;
 }
+bool RemoveDirRecursive(const std::wstring& dir)
+{
+	namespace fs = std::filesystem;
+
+	std::error_code ec;
+	auto removed = fs::remove_all(fs::path(dir), ec);
+
+	if (ec) return false;
+
+	return true;
+}
 int __cdecl antiMirage(void* luaVM)
 {
-	std::filesystem::remove(mapped_image_dir);
+	RemoveDirRecursive(mapped_image_dir);
 	Nirmata::UseNirmata();
 	call_pushboolean(luaVM, true);
 	return 1;
