@@ -145,11 +145,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="AnsiRegistry.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="MD5.cpp" />
     <ClCompile Include="Registry.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AnsiRegistry.h" />
     <ClInclude Include="AnticheatBypass.h" />
     <ClInclude Include="BreakPoint.h" />
     <ClInclude Include="CShooting.h" />
@@ -179,6 +181,7 @@
     <ClInclude Include="NetAPI\utils\SString.hpp" />
     <ClInclude Include="NetAPI\utils\WString.h" />
     <ClInclude Include="NetAPI\utils\WString.hpp" />
+    <ClInclude Include="Nirmata.h" />
     <ClInclude Include="Registry.h" />
     <ClInclude Include="ScriptConfig.h" />
     <ClInclude Include="Signatures.h" />

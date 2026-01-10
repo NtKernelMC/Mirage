@@ -116,7 +116,7 @@ void SetMirageDirs()
 }
 int main()
 {
-	SetConsoleTitleA(xorstr_("Mirage Injector V5.3 by DroidZero"));
+	SetConsoleTitleA(xorstr_("Mirage Injector V6 by DroidZero"));
 	setlocale(LC_ALL, xorstr_("Russian"));
 	system(xorstr_("color 04"));
 	SetMirageDirs();

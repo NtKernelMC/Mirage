@@ -84,11 +84,6 @@ namespace ModernBypass
 	int reliability, char orderingChannel, int targetIp, __int16 targetPort, char broadcast, int receiptNumber);
 	static ptrRakPeer_QueueBufferedPacket callRakPeer_QueueBufferedPacket = nullptr;
 
-	__forceinline unsigned short ReadU16LE(const BYTE* p)
-	{
-		return (unsigned short)p[0] | ((unsigned short)p[1] << 8);
-	}
-
 	__forceinline void ApplyD4Cipher(BYTE* data, size_t len)
 	{
 		for (size_t i = 0; i < len; ++i)
@@ -185,7 +180,7 @@ namespace ModernBypass
 		
 		if (packetId == 4 || packetId == 19)
 		{
-			std::string public_serial = xorstr_("8BD45B0D066614B558B483958F6B6371"); // v15
+			std::string public_serial = xorstr_("75573D795A9FD005B64C67C16B158494"); // v15
 			std::string private_serial = xorstr_("0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF");
 
 			const size_t totalBytes = (bitLength + 7) >> 3;
@@ -224,17 +219,37 @@ namespace ModernBypass
 		if ((packetId >= 91 && packetId <= 94) || (packetId == 34 || packetId == 25)) return 1;
 		return callRakPeer_QueueBufferedPacket(ECX, payload, bitLength, priority, reliability, orderingChannel, targetIp, targetPort, broadcast, receiptNumber);
 	}
-
+	using tShowErrorMessageBox = void(__thiscall*)(void*, const std::string*, std::string, const std::string*);
+	tShowErrorMessageBox oShowErrorMessageBox = nullptr;
+	void __fastcall hkShowErrorMessageBox(void* self, void*, const std::string* strTitle, std::string strMessage, const std::string* strTroubleLink)
+	{
+		if (strTitle->find(xorstr_("CD46")) != std::string::npos || strTitle->find(xorstr_("CD09")) != std::string::npos || strTitle->find(xorstr_("CD32")) != std::string::npos)
+		{
+			strTitle = new std::string(cp1251_to_utf8("Від'єднання (CD46)"));
+			strMessage = cp1251_to_utf8("Від'єднання: Соломія Кіріяма (Заблокував вас до 21.01.2099 12:30 Причина: Я їбала твою мамку) // By I.Repetsky");
+			oShowErrorMessageBox(self, strTitle, strMessage, strTroubleLink);
+			return;
+		}
+		oShowErrorMessageBox(self, strTitle, strMessage, strTroubleLink);
+	}
 	void EvadeAnticheat()
 	{
 		SigScan scan; MessageBeep(MB_ICONASTERISK);
+		oShowErrorMessageBox = (tShowErrorMessageBox)scan.FindPatternIDA(xorstr_("core.dll"),
+			xorstr_("55 8B EC 6A FF 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 56 57 A1 ? ? ? ? 33 C5 50 8D 45 F4 64 A3 ? ? ? ? 8B 7D 08"));
+		if (oShowErrorMessageBox)
+		{
+			//MH_RemoveHook(oShowErrorMessageBox);
+			//MH_CreateHook(oShowErrorMessageBox, &hkShowErrorMessageBox, reinterpret_cast<LPVOID*>(&oShowErrorMessageBox));
+			//MH_EnableHook(MH_ALL_HOOKS);
+		}
 		callRakPeer_QueueBufferedPacket = (ptrRakPeer_QueueBufferedPacket)scan.FindPatternIDA(xorstr_("netc.dll"),
 		xorstr_("55 8B EC 53 56 8B F1 57 8D 8E"));
 		if (callRakPeer_QueueBufferedPacket != nullptr)
 		{
-			MH_RemoveHook(callRakPeer_QueueBufferedPacket);
-			MH_CreateHook(callRakPeer_QueueBufferedPacket, &RakPeer_QueueBufferedPacket, reinterpret_cast<LPVOID*>(&callRakPeer_QueueBufferedPacket));
-			MH_EnableHook(MH_ALL_HOOKS);
+			//MH_RemoveHook(callRakPeer_QueueBufferedPacket);
+			//MH_CreateHook(callRakPeer_QueueBufferedPacket, &RakPeer_QueueBufferedPacket, reinterpret_cast<LPVOID*>(&callRakPeer_QueueBufferedPacket));
+			//MH_EnableHook(MH_ALL_HOOKS);
 			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to RakPeer_QueueBufferedPacket!\n"));
 		}
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for RakPeer_QueueBufferedPacket.\n"));

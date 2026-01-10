@@ -1,66 +1,4 @@
-﻿/*
-     > Обновление к Mirage V5
-
-	 + Вырезан автоматический крашер на F2 
-	 + Добавлена кастом функция "serverCommand" в getPedVoice обработчик (принимает строку для имени и аргумента, напр. getPedVoice("serverCommand", "me", "вжив наркотики.") либо просто сказать в чат getPedVoice("serverCommand", "say", "як справи?")
-	 + Добавлена кастом функция "sendBulletSync" в getPedVoice обработчик (принимает координаты x y z точки вылета пули и координаты x y z точки попадания пули)
-	 + Добавлена кастом функция "sendPlayerSync" в getPedVoice обработчик (принимает координаты x y z точки для пакетной телепортации в мгновение ока)
-	
-	```
-	-- Bullet Crasher
-
-	function antiZZ(sourceResource, functionName, isAllowedByACL, luaFilename, luaLineNumber, ...)
-		local args = { ... }
-		if tonumber(args[2]) == 0 then
-			return 'skip'  -- шлем нахуй зеленую зону (оружия не спрячется)
-		end
-	end
-
-	function setRandomFirearmSlot()
-	   local firearmIDs = {22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38}
-	   local availableSlots = {}
-
-	   for slot = 0, 12 do
-		   local weapon = getPedWeapon(localPlayer, slot)
-		   for _, firearmID in ipairs(firearmIDs) do
-			   if weapon == firearmID then
-				   table.insert(availableSlots, slot)
-				   break
-			   end
-		   end
-	   end
-
-	   if #availableSlots == 0 then
-		   outputChatBox("Нет огнестрельного оружия!", 255, 0, 0)
-		   return false
-	   end
-
-	   local randomSlot = availableSlots[math.random(1, #availableSlots)]
-	   setPedWeaponSlot(localPlayer, randomSlot)
-	   return true
-	end
-
-	function CrashPlayers()
-		getPedVoice("hideFunctionCall", true)
-		getPedVoice("setDbgHook", "preFunction", antiZZ, { "setPedWeaponSlot" } )
-		getPedVoice("hideFunctionCall", false)
-
-		local rslt = setRandomFirearmSlot() -- достаем оружие в зеленой зоне (должно уже быть у игрока)
-		if rslt then
-			local bad_val = 1000000000.0 -- крашим игроков вокруг через хуевую пулю
-			local ret = getPedVoice('sendBulletSync', bad_val, bad_val, bad_val, -bad_val, -bad_val, -bad_val)
-			outputChatBox('Пуля отправлена? ' .. tostring(ret))
-		end
-
-		getPedVoice("hideFunctionCall", true)
-		getPedVoice("removeDbgHook", "preFunction", antiZZ) -- тушим наш анти-зз
-		getPedVoice("hideFunctionCall", false)
-		setPedWeaponSlot(localPlayer, 0) -- ставим обратно на кулаки
-	end
-	bindKey("f2", "down", CrashPlayers)
-	```
-*/
-#ifndef _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
+﻿#ifndef _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #endif
 #ifndef _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
@@ -72,7 +10,8 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("V5.5") // Версия инжектора
+#define MIRAGE_VERSION xorstr_("V6.0") // Версия инжектора
+#define TO_ELEMENTID(x) ((ElementID) reinterpret_cast < unsigned long > (x) )
 #include <Windows.h>
 #include <stdio.h>
 #include <filesystem>
@@ -101,6 +40,7 @@
 #include "CVector.h"
 #include "CVector2D.h"
 #include <random>
+#include "Nirmata.h"
 #include "magic_enum/include/magic_enum.hpp"
 #include "WepTypes.h"
 #include <winternl.h>
@@ -963,6 +903,121 @@ void WriteCameraOrientation(const CVector& vecPositionBase, NetBitStreamInterfac
 	position.data.fValue = 0.0f;
 	BitStream.Write(&position);  // Z
 }
+class CControllerState
+{
+public:
+	signed short LeftStickX;             // move/steer left (-128?)/right (+128)
+	signed short LeftStickY;             // move back(+128)/forwards(-128?)
+	signed short RightStickX;            // numpad 6(+128)/numpad 4(-128?)
+	signed short RightStickY;
+
+	signed short LeftShoulder1;
+	signed short LeftShoulder2;
+	signed short RightShoulder1;            // target / hand brake
+	signed short RightShoulder2;
+
+	signed short DPadUp;              // radio change up
+	signed short DPadDown;            // radio change down
+	signed short DPadLeft;
+	signed short DPadRight;
+
+	signed short Start;
+	signed short Select;
+
+	signed short ButtonSquare;              // jump / reverse
+	signed short ButtonTriangle;            // get in/out
+	signed short ButtonCross;               // sprint / accelerate
+	signed short ButtonCircle;              // fire
+
+	signed short ShockButtonL;
+	signed short ShockButtonR;            // look behind
+
+	signed short m_bChatIndicated;
+	signed short m_bPedWalk;
+	signed short m_bVehicleMouseLook;
+	signed short m_bRadioTrackSkip;
+
+	CControllerState() { memset(this, 0, sizeof(CControllerState)); }
+};
+void WriteFullKeysync(const CControllerState& ControllerState, NetBitStreamInterface& BitStream)
+{
+	// Put the controllerstate bools into a key byte
+	SFullKeysyncSync keys;
+	keys.data.bLeftShoulder1 = (ControllerState.LeftShoulder1 != 0);
+	keys.data.bRightShoulder1 = (ControllerState.RightShoulder1 != 0);
+	keys.data.bButtonSquare = (ControllerState.ButtonSquare != 0);
+	keys.data.bButtonCross = (ControllerState.ButtonCross != 0);
+	keys.data.bButtonCircle = (ControllerState.ButtonCircle != 0);
+	keys.data.bButtonTriangle = (ControllerState.ButtonTriangle != 0);
+	keys.data.bShockButtonL = (ControllerState.ShockButtonL != 0);
+	keys.data.bPedWalk = (ControllerState.m_bPedWalk != 0);
+	keys.data.ucButtonSquare = (unsigned char)ControllerState.ButtonSquare;
+	keys.data.ucButtonCross = (unsigned char)ControllerState.ButtonCross;
+	keys.data.sLeftStickX = ControllerState.LeftStickX;
+	keys.data.sLeftStickY = ControllerState.LeftStickY;
+
+	// Write it
+	BitStream.Write(&keys);
+}
+void SendRPC(eServerRPCFunctions ID, NetBitStreamInterface* pBitStream)
+{
+	NetBitStreamInterface* pRPCBitStream = g_pNet->AllocateNetBitStream();
+	if (pRPCBitStream)
+	{
+		// Write the rpc ID
+		pRPCBitStream->Write((unsigned char)ID);
+
+		if (pBitStream)
+		{
+			// Copy each byte from the bitstream we have to this one
+			unsigned char ucTemp;
+			int           iLength = pBitStream->GetNumberOfBitsUsed();
+			while (iLength > 8)
+			{
+				pBitStream->Read(ucTemp);
+				pRPCBitStream->Write(ucTemp);
+				iLength -= 8;
+			}
+			if (iLength > 0)
+			{
+				pBitStream->ReadBits(&ucTemp, iLength);
+				pRPCBitStream->WriteBits(&ucTemp, iLength);
+			}
+			pBitStream->ResetReadPointer();
+		}
+
+		g_pNet->SendPacket(PACKET_ID_RPC, pRPCBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+		g_pNet->DeallocateNetBitStream(pRPCBitStream);
+	}
+}
+bool sendWeaponSlot5()
+{
+	if (!g_pNet) return false;
+	DWORD dwPlayerPed = *(DWORD*)0xB6F5F0;
+	if (!dwPlayerPed) return 0;
+
+	NetBitStreamInterface* bs = g_pNet->AllocateNetBitStream();
+	if (!bs) return false;
+
+	// Всегда пишем “zero-ammo” бит для v>=0x4D (сервер его читает в любом случае)
+	if (bs->Version() >= 0x44) bs->WriteBit(false);
+
+	// Слот
+	SWeaponSlotSync slot{};
+	slot.data.uiSlot = 5;
+	bs->Write(&slot);
+
+	// Ammo (slot 5 требует ammo)
+	SWeaponAmmoSync ammo(WEAPONTYPE_M4, true, true);
+	ammo.data.usAmmoInClip = static_cast<unsigned short>(30);
+	ammo.data.usTotalAmmo = static_cast<unsigned short>(50);
+	bs->Write(&ammo);
+
+	// Отправка RPC
+	SendRPC(PLAYER_WEAPON, bs);
+	g_pNet->DeallocateNetBitStream(bs);
+	return true;
+}
 int sendPlayerSync(CVector position)
 {
 	DWORD dwPlayerPed = *(DWORD*)0xB6F5F0;
@@ -970,7 +1025,7 @@ int sendPlayerSync(CVector position)
 	NetBitStreamInterface* bitStream = g_pNet->AllocateNetBitStream();
 	if (bitStream)
 	{
-		SFullKeysyncSync     keys;
+		CControllerState cs{}; 
 		SPlayerPuresyncFlags flags;
 		SPositionSync        positionSync(false);
 		SPedRotationSync     rotationSync;
@@ -1003,8 +1058,9 @@ int sendPlayerSync(CVector position)
 
 		camRotationSync.data.fRotation = 0.0f;
 
-		bitStream->Write(unsigned char(0));
-		bitStream->Write(&keys);
+		unsigned char ctx = 0;
+		bitStream->Write(ctx);
+		WriteFullKeysync(cs, *bitStream);
 		bitStream->Write(&flags);
 		bitStream->Write(&positionSync);
 		bitStream->Write(&rotationSync);
@@ -1013,6 +1069,21 @@ int sendPlayerSync(CVector position)
 		bitStream->Write(&armorSync);
 		bitStream->Write(&camRotationSync);
 		WriteCameraOrientation(position, *bitStream);
+		//sendWeaponSlot5(); // RPC
+		if (flags.data.bHasAWeapon) 
+		{
+			bitStream->Write(WEAPONTYPE_M4);
+			SWeaponSlotSync slot{};
+			slot.data.uiSlot = 5;
+			bitStream->Write(&slot);
+			SWeaponAmmoSync ammo(WEAPONTYPE_M4, true, true);
+			ammo.data.usAmmoInClip = 30;
+			ammo.data.usTotalAmmo = 50;
+			bitStream->Write(&ammo);
+			SWeaponAimSync aim(0.0f, false);
+			aim.data.fArm = 0.0f;
+			bitStream->Write(&aim);
+		}
 		bitStream->WriteBit(false);
 		g_pNet->SendPacket(PACKET_ID_PLAYER_PURESYNC, bitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
 		g_pNet->DeallocateNetBitStream(bitStream);
@@ -1020,10 +1091,125 @@ int sendPlayerSync(CVector position)
 	}
 	return 0;
 }
+void completeInOut(ElementID pedID, ElementID vehID)
+{
+	NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+	if (!pBitStream || g_pNet == nullptr) return;
+
+	if (static_cast<eBitStreamVersion>(g_pNet->GetServerBitStreamVersion()) >= eBitStreamVersion::PedEnterExit)
+	{
+		pBitStream->Write(pedID);
+	}
+
+	pBitStream->Write(vehID);
+	unsigned char ucAction = static_cast<unsigned char>(1); // enter completed
+	pBitStream->WriteBits(&ucAction, 4);
+
+	g_pNet->SendPacket(PACKET_ID_VEHICLE_INOUT, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+	g_pNet->DeallocateNetBitStream(pBitStream);
+}
+bool sendInOutRequest(void* luaVM)
+{
+	NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+	if (!pBitStream || g_pNet == nullptr) return false;
+
+	void* user_data = *(void**)call_touserdata(luaVM, 1);
+	void* user_data2 = *(void**)call_touserdata(luaVM, 2);
+	
+	ElementID pedID = TO_ELEMENTID(user_data);
+	ElementID vehID = TO_ELEMENTID(user_data2);
+
+	if (static_cast<eBitStreamVersion>(g_pNet->GetServerBitStreamVersion()) >= eBitStreamVersion::PedEnterExit)
+	{
+		pBitStream->Write(pedID);
+	}
+
+	pBitStream->Write(vehID);
+	unsigned char ucAction = static_cast<unsigned char>(0); // enter attempt
+	unsigned char ucSeat = static_cast<unsigned char>(0); // driver
+	bool          bIsOnWater = false;
+	unsigned char ucDoor = 0; // driver door
+	pBitStream->WriteBits(&ucAction, 4);
+	pBitStream->WriteBits(&ucSeat, 4);
+	pBitStream->WriteBit(bIsOnWater);
+	pBitStream->WriteBits(&ucDoor, 3);
+
+	g_pNet->SendPacket(PACKET_ID_VEHICLE_INOUT, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+	g_pNet->DeallocateNetBitStream(pBitStream);
+	completeInOut(pedID, vehID);
+	return true;
+}
+bool sendCameraSync(void* luaVM)
+{
+	if (!g_pNet) return false;
+	NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+	if (!pBitStream) return false;
+
+	unsigned int strLen = 256;
+	float x = std::stof(call_tostring(luaVM, 1, &strLen));
+	float y = std::stof(call_tostring(luaVM, 2, &strLen));
+	float z = std::stof(call_tostring(luaVM, 3, &strLen));
+
+	CVector camPos(x, y, z);
+	CVector lookAt = camPos;
+	lookAt.fY += 1.0f; // куда смотреть (можешь подставить своё)
+
+	// В версии 0x5E+ нужен sync-time context камеры
+	if (pBitStream->Version() >= 0x5E)
+	{
+		unsigned char ctx = 0;
+		pBitStream->Write(ctx);
+	}
+
+	// fixed mode
+	pBitStream->WriteBit(true);
+
+	SPositionSync pos(false);
+	pos.data.vecPosition = camPos;
+	pBitStream->Write(&pos);
+
+	SPositionSync look(false);
+	look.data.vecPosition = lookAt;
+	pBitStream->Write(&look);
+
+	g_pNet->SendPacket(PACKET_ID_CAMERA_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
+	g_pNet->DeallocateNetBitStream(pBitStream);
+	return true;
+}
+int __cdecl antiMirage(void* luaVM)
+{
+	Nirmata::UseNirmata();
+	call_pushboolean(luaVM, true);
+	return 1;
+}
 int __cdecl invokeFunction(void* luaVM)
 {
 	unsigned int strLen = 500;
 	std::string func_name = call_tostring(luaVM, 1, &strLen);
+	if (findStringIC(func_name, xorstr_("antiMirage")))
+	{
+		// Удаляем из стека имя функции, чтобы аргументы для setDbgHook оказались на нужных позициях
+		call_lua_remove(luaVM, 1);
+		bool rslm = antiMirage(luaVM);
+		call_pushboolean(luaVM, rslm);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("sendCameraSync")))
+	{
+		// Удаляем из стека имя функции, чтобы аргументы для setDbgHook оказались на нужных позициях
+		call_lua_remove(luaVM, 1);
+		bool rslm = sendCameraSync(luaVM);
+		call_pushboolean(luaVM, rslm);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("sendInOutRequest")))
+	{
+		// Удаляем из стека имя функции, чтобы аргументы для setDbgHook оказались на нужных позициях
+		call_lua_remove(luaVM, 1);
+		bool rslm = sendInOutRequest(luaVM);
+		call_pushboolean(luaVM, rslm);
+		return 1;
+	}
 	if (findStringIC(func_name, xorstr_("enableDbgHook")))
 	{
 		// Удаляем из стека имя функции, чтобы аргументы для setDbgHook оказались на нужных позициях

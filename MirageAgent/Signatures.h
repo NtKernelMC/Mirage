@@ -431,6 +431,8 @@ void SignatureScanner()
 	call_settop = (lua_settop)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_settop"));
 	if (call_settop != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_settop!\n"));
 	else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_settop.\n"));
+    call_touserdata = (plua_touserdata)GetProcAddress(GetModuleHandleA(xorstr_("lua5.1c.dll")), xorstr_("lua_touserdata"));
+    if (call_touserdata != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_touserdata!\n"));
     if (mirage.injection_type == LuaInjectionType::METHOD_LUA_L_LOADBUFFER)
     {
         callLuaLoadBuffer = (t_LuaLoadBuffer)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("luaL_loadbuffer"));
