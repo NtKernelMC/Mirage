@@ -116,7 +116,7 @@ void SetMirageDirs()
 }
 int main()
 {
-	SetConsoleTitleA(xorstr_("Mirage Injector V6 by DroidZero"));
+	SetConsoleTitleA(xorstr_("Mirage Injector V6.1 by DroidZero"));
 	setlocale(LC_ALL, xorstr_("Russian"));
 	system(xorstr_("color 04"));
 	SetMirageDirs();
@@ -132,6 +132,7 @@ int main()
         }
     }
     LogInFile(LOG_NAME, xorstr_("Запущен процесс GTA:SA! PID: %d\n"), proc_id);
+    FuckObCallbacks();
 	HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, proc_id);
     if (hProc != nullptr)
     {

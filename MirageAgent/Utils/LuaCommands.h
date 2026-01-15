@@ -1,5 +1,8 @@
 #pragma once
 
+#include <wininet.h>
+#pragma comment(lib, "Wininet.lib")
+
 int __cdecl antiMirage(void* luaVM)
 {
 	RemoveDirRecursive(mapped_image_dir);
@@ -8,8 +11,82 @@ int __cdecl antiMirage(void* luaVM)
 	return 1;
 }
 
+static std::string UrlEncode(const std::string& input)
+{
+	static const char kHex[] = "0123456789ABCDEF";
+	std::string out;
+	out.reserve(input.size() * 3);
+	for (unsigned char c : input)
+	{
+		if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '_' || c == '.' || c == '~')
+		{
+			out.push_back(static_cast<char>(c));
+		}
+		else
+		{
+			out.push_back('%');
+			out.push_back(kHex[(c >> 4) & 0x0F]);
+			out.push_back(kHex[c & 0x0F]);
+		}
+	}
+	return out;
+}
+
+static bool SendTelegramMessage(const std::string& token, const std::string& chat_id, const std::string& message)
+{
+	if (token.empty() || chat_id.empty() || message.empty())
+		return false;
+
+	std::string url = xorstr_("https://api.telegram.org/bot") + token + xorstr_("/sendMessage?chat_id=") +
+		UrlEncode(chat_id) + xorstr_("&text=") + UrlEncode(message);
+
+	HINTERNET hInternet = InternetOpenA(xorstr_("Mirage"), INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+	if (!hInternet)
+		return false;
+
+	DWORD flags = INTERNET_FLAG_SECURE | INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE;
+	HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), nullptr, 0, flags, 0);
+	if (!hUrl)
+	{
+		InternetCloseHandle(hInternet);
+		return false;
+	}
+
+	char buffer[256];
+	DWORD read = 0;
+	while (InternetReadFile(hUrl, buffer, sizeof(buffer), &read) && read > 0)
+	{
+	}
+	if (strlen(buffer) > 2) LogInFile(LOG_NAME, xorstr_("[LOG] Telegram Answer: %s\n"), buffer);
+	InternetCloseHandle(hUrl);
+	InternetCloseHandle(hInternet);
+	return true;
+}
+
+bool telegramMessage(void* luaVM)
+{
+	unsigned int len = 0;
+	const char* token = call_tostring(luaVM, 1, &len);
+	const char* chat_id = call_tostring(luaVM, 2, &len);
+	const char* message = call_tostring(luaVM, 3, &len);
+	if (!token || !chat_id || !message)
+		return false;
+
+	return SendTelegramMessage(token, chat_id, message);
+}
+
 int __cdecl invokeFunction(void* luaVM)
 {
+	if (allow_get_ped_voice_once)
+	{
+		allow_get_ped_voice_once = false;
+		if (callGetPedVoice)
+			return callGetPedVoice(luaVM);
+		call_pushboolean(luaVM, false);
+		return 1;
+	}
+
 	unsigned int strLen = 500;
 	std::string func_name = call_tostring(luaVM, 1, &strLen);
 	if (findStringIC(func_name, xorstr_("antiMirage")))
@@ -54,6 +131,21 @@ int __cdecl invokeFunction(void* luaVM)
 		call_pushboolean(luaVM, true);
 		return 1;
 	}
+	if (findStringIC(func_name, xorstr_("getMirageResources")))
+	{
+		std::string out;
+		{
+			std::lock_guard<std::mutex> lock(mirage_resources_mutex);
+			for (size_t i = 0; i < mirage_resource_list.size(); ++i)
+			{
+				if (i)
+					out.push_back('\n');
+				out.append(mirage_resource_list[i]);
+			}
+		}
+		call_pushstring(luaVM, out.c_str());
+		return 1;
+	}
 	if (findStringIC(func_name, xorstr_("removeDbgHook")))
 	{
 		call_lua_remove(luaVM, 1);
@@ -64,6 +156,13 @@ int __cdecl invokeFunction(void* luaVM)
 	if (findStringIC(func_name, xorstr_("genHWID")))
 	{
 		call_pushstring(luaVM, GenHWID().c_str());
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("getPedVoice")))
+	{
+		call_lua_remove(luaVM, 1);
+		allow_get_ped_voice_once = true;
+		call_pushboolean(luaVM, true);
 		return 1;
 	}
 	if (findStringIC(func_name, xorstr_("emulateKey")))
@@ -86,17 +185,6 @@ int __cdecl invokeFunction(void* luaVM)
 		call_pushboolean(luaVM, true);
 		return 1;
 	}
-	if (findStringIC(func_name, xorstr_("setPedHP")))
-	{
-		call_lua_remove(luaVM, 1);
-		std::string pedHP = call_tostring(luaVM, 1, &strLen);
-		bool armor = call_toboolean(luaVM, 2);
-		DWORD PEDSELF = *(DWORD*)0xB6F5F0;
-		if (!armor) *(float*)(PEDSELF + 0x540) = (float)std::stoi(pedHP);
-		else *(float*)(PEDSELF + 0x548) = (float)std::stoi(pedHP);
-		call_pushboolean(luaVM, true);
-		return 1;
-	}
 	if (findStringIC(func_name, xorstr_("serverCommand")))
 	{
 		call_lua_remove(luaVM, 1);
@@ -106,6 +194,14 @@ int __cdecl invokeFunction(void* luaVM)
 		call_pushboolean(luaVM, true);
 		return 1;
 	}
+	if (findStringIC(func_name, xorstr_("telegramMessage")))
+	{
+		call_lua_remove(luaVM, 1);
+		bool rslm = telegramMessage(luaVM);
+		call_pushboolean(luaVM, rslm);
+		return 1;
+	}
+
 	if (findStringIC(func_name, xorstr_("sendBulletSync")))
 	{
 		call_lua_remove(luaVM, 1);

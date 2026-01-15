@@ -25,6 +25,8 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <array>
+#include <algorithm>
+#include <atomic>
 #include <direct.h>
 #include <vector>
 #include <map>
@@ -65,6 +67,7 @@ bool cursed_voice = false;
 bool DbgHook = true; // по умолчанию разрешаем работу дебаг хуков
 void* CNetAPI = nullptr;
 bool HideCall = false;
+std::atomic_bool allow_get_ped_voice_once = false;
 BYTE exit_prologue[5] = { 0x0 };
 typedef BOOL(__stdcall* ptrGetThreadContext)(HANDLE hThread, LPCONTEXT lpContext);
 ptrGetThreadContext callGetThreadContext = nullptr;
@@ -86,6 +89,9 @@ typedef int(__cdecl* ptrAddDebugHook)(void* luaVM);
 ptrAddDebugHook callAddDebugHook = nullptr;
 typedef int(__cdecl* ptrRemoveDebugHook)(void* luaVM);
 ptrRemoveDebugHook callRemoveDebugHook = nullptr;
+typedef int(__cdecl* ptrGetPedVoice)(void* luaVM);
+ptrGetPedVoice callGetPedVoice = nullptr;
+LPVOID getPedVoiceTarget = nullptr;
 using lua_CFunction = int(__cdecl*)(void*);
 #define LUA_GLOBALSINDEX (-10002)
 typedef void(__cdecl* lua_pushcclosure)(void* L, lua_CFunction fn, int n);
@@ -273,6 +279,8 @@ bool hwbp_end1 = false;
 bool hwbp_end2 = false;
 
 std::vector<LVM> lua_injection_list;
+extern std::vector<std::string> mirage_resource_list;
+extern std::mutex mirage_resources_mutex;
 
 std::wstring lua_scripts_dir = L"";
 std::wstring mapped_image_dir = L"";

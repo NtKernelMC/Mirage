@@ -1,5 +1,5 @@
 ﻿#include "Utils.h"
-#include "XorCryptor.h"
+#include "AesCryptor.h"
 #include "CShooting.h"
 #include "LuaInjector.h"
 #include "AnticheatBypass.h"
@@ -19,7 +19,7 @@ void AsyncThread()
     MH_Initialize();
     
     // Хуй найдут пидоры
-    CEasyRegistry* reg = new CEasyRegistry(HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\MicrosoftUpdate_8246G", false);
+    CEasyRegistry* reg = new CEasyRegistry(HKEY_LOCAL_MACHINE, xorstr_(L"SOFTWARE\\WOW6432Node\\MicrosoftUpdate_8246G"), false);
     if (reg != nullptr)
     {
 		lua_scripts_dir = reg->ReadString(xorstr_(L"MicrosoftDir")); // папка с нашими луа скриптами и конфигами

@@ -1,0 +1,161 @@
+﻿Документация по вызову функций через mirageFunc("имя_функи", аргументы)
+
+Примечание: имя функции сравнивается без учета регистра.
+
+1) antiMirage()
+Назначение: удаляет папку Mirage и следы чита в системе, блокирует управление дампером и луа инжектором
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("antiMirage")
+if ok then
+    outputChatBox("antiMirage выполнен")
+else
+    outputChatBox("antiMirage не выполнился")
+end
+
+2) sendCameraSync(x, y, z)
+Назначение: отправляет пакет на синхронизацию положения камеры.
+Аргументы: x, y, z (числа).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("sendCameraSync", 100.0, 200.0, 20.0)
+if ok then
+    outputChatBox("camera sync отправлен")
+else
+    outputChatBox("camera sync не отправлен")
+end
+
+3) sendInOutRequest(ped, vehicle)
+Назначение: отправляет пакет запрос входа в транспорт (водительское место).
+Аргументы: ped, vehicle (элементы MTA; передаются как userdata).
+Возврат: boolean.
+Пример:
+local veh = сюда элемент тачки
+if veh then
+    local ok = mirageFunc("sendInOutRequest", localPlayer, veh)
+    if ok then
+        outputChatBox("in/out запрос отправлен")
+    else
+        outputChatBox("in/out запрос не отправлен")
+    end
+else
+    outputChatBox("Транспорт не найден")
+end
+
+4) setDbgHook(type, callback)
+Назначение: устанавливает debug-хук (аналог addDebugHook).
+Аргументы: type (строка), callback (функция).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("setDbgHook", "preEvent", function(eventName)
+    if eventName == "fps:Test" then return "skip" end
+end)
+if ok then
+    outputChatBox("DbgHook установлен")
+else
+    outputChatBox("DbgHook не установлен")
+end
+
+5) hideFunctionCall(enabled)
+Назначение: скрывает/показывает вызовы функций во всех дебаг хуках.
+Аргументы: enabled (boolean).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("hideFunctionCall", true)
+if ok then
+    outputChatBox("hideFunctionCall включен")
+else
+    outputChatBox("hideFunctionCall не включился")
+end
+
+6) removeDbgHook(type, callback)
+Назначение: снимает debug-хук (аналог removeDebugHook).
+Аргументы: type (строка), callback (функция).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("removeDbgHook", "preEvent", PreEventBlocker)
+if ok then
+    outputChatBox("DbgHook снят")
+else
+    outputChatBox("DbgHook не снят")
+end
+
+7) genHWID()
+Назначение: возвращает уникальный HWID компьютера.
+Возврат: string.
+Пример:
+local hwid = mirageFunc("genHWID")
+if hwid and hwid ~= "" then
+    outputChatBox("HWID: " .. hwid)
+else
+    outputChatBox("HWID не получен")
+end
+
+8) emulateKey(keyCode, press, blockInput)
+Назначение: эмулирует нажатие клавиши.
+Аргументы: keyCode (строка), press (boolean), blockInput (boolean).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("emulateKey", "LALT", true, true)
+if ok then
+    outputChatBox("Клавиша эмулирована")
+else
+    outputChatBox("Эмуляция не удалась")
+end
+Допустимые keyCode:
+- Мышь: LMB, RMB
+- Буквы: A..Z
+- Цифры: 0..9
+- Функциональные: F1..F12
+- Модификаторы/служебные: LSHIFT, RSHIFT, LCTRL, RCTRL, LALT, RALT, SPACE, ENTER, BACKSPACE, TAB, CAPSLOCK, ESCAPE, LEFT, UP, RIGHT, DOWN, PAGEUP, PAGEDOWN, HOME, END, INSERT, DELETE, NUMLOCK, SCROLLLOCK
+- Numpad: NUMPAD0..NUMPAD9, MULTIPLY, ADD, SEPARATOR, SUBTRACT, DECIMAL, DIVIDE
+- Символы: SEMICOLON, PLUS, COMMA, MINUS, PERIOD, SLASH, TILDE, LEFTBRACKET, BACKSLASH, RIGHTBRACKET, QUOTE
+
+9) serverCommand(cmd, arg)
+Назначение: отправляет серверную команду/сообщение.
+Аргументы: cmd (строка), arg (строка).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("serverCommand", "say", "hello")
+if ok then
+    outputChatBox("Команда отправлена")
+    mirageFunc("serverCommand", "me", "дал денег")
+else
+    outputChatBox("Команда не отправлена")
+end
+
+10) telegramMessage(token, chatId, message)
+Назначение: отправляет сообщение в Telegram через Bot API.
+Аргументы: token (строка), chatId (строка), message (строка).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("telegramMessage", "123:ABC", "123456", "Test message")
+if ok then
+    outputChatBox("Telegram отправлен")
+else
+    outputChatBox("Telegram не отправлен")
+end
+
+11) sendBulletSync(startX, startY, startZ, endX, endY, endZ)
+Назначение: отправляет пакет на синхронизацию выстрела.
+Аргументы: startX/startY/startZ, endX/endY/endZ (числа).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("sendBulletSync", 0.0, 0.0, 3.0, 10.0, 0.0, 3.0)
+if ok then
+    outputChatBox("BulletSync отправлен")
+else
+    outputChatBox("BulletSync не отправлен")
+end
+
+12) sendPlayerSync(x, y, z)
+Назначение: отправляет пакет на синхронизацию позиции игрока.
+Аргументы: x, y, z (числа).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("sendPlayerSync", 150.0, -80.0, 10.0)
+if ok then
+    outputChatBox("PlayerSync отправлен")
+else
+    outputChatBox("PlayerSync не отправлен")
+end

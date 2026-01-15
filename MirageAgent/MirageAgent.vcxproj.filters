@@ -89,7 +89,7 @@
     <ClInclude Include="HWBP.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
-    <ClInclude Include="XorCryptor.h">
+    <ClInclude Include="AesCryptor.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="HWID.h">

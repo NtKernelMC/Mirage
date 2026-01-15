@@ -369,3 +369,63 @@ DWORD GetThreadWithWindow(DWORD processID)
     }
     return threadID;
 }
+static uint32_t FairplayHash(const uint8_t* data, size_t len)
+{
+    uint32_t h = 73798179u;
+    for (size_t i = 0; i < len; ++i)
+    {
+        uint8_t b = data[i];
+        h = (b + h) ^ (uint32_t(b) << ((i & 7) + 8));
+    }
+    return h;
+}
+
+void FuckObCallbacks()
+{
+    const wchar_t* devicePath = xorstr_(L"\\\\.\\FairplayKD0");
+    HANDLE h = CreateFileW(devicePath, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        DWORD errorik = GetLastError();
+        if (errorik == 2) LogInFile(LOG_NAME, xorstr_("FairplayKD драйвер не запущен!\n"));
+        else LogInFile(LOG_NAME, xorstr_("CreateFile failed: %d\n"), errorik);
+        return;
+    }
+
+    // Build IOCTL 153 packet
+    // [cmd_id][magic][flagA][flagB][hash]
+    uint32_t cmd_id = 153;
+    uint32_t magic = 420;
+    uint32_t flagA = 1; // example: enable
+    uint32_t flagB = 0; // example: disable
+
+    std::vector<uint8_t> buf;
+    buf.resize(5 * sizeof(uint32_t));
+    uint32_t* u32 = reinterpret_cast<uint32_t*>(buf.data());
+    u32[0] = cmd_id;
+    u32[1] = magic;
+    u32[2] = flagA;
+    u32[3] = flagB;
+
+    uint32_t hash = FairplayHash(buf.data(), buf.size() - sizeof(uint32_t));
+    u32[4] = hash;
+
+    DWORD bytesReturned = 0;
+    std::vector<uint8_t> outBuf(64, 0); // small output buffer
+
+    const DWORD ioctl = 0x22E008;
+    BOOL ok = DeviceIoControl(h, ioctl,
+        buf.data(), (DWORD)buf.size(),
+        outBuf.data(), (DWORD)outBuf.size(),
+        &bytesReturned, nullptr);
+
+    if (!ok)
+    {
+        LogInFile(LOG_NAME, xorstr_("DeviceIoControl failed: %d\n"), GetLastError());
+        CloseHandle(h);
+        return;
+    }
+    else LogInFile(LOG_NAME, xorstr_("FairPlay driver is fucked and owned!!!\n"));
+
+    CloseHandle(h);
+}

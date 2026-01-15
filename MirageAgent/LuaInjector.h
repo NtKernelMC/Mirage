@@ -1,7 +1,51 @@
+#include "AesCryptor.h"
 // Глобальные переменные для хранения загруженных скриптов
 // Важно: храним скрипты глобально, чтобы они не удалялись после выхода из функции
 static std::unordered_map<std::string, std::string> loaded_custom_scripts;
 static std::mutex scripts_mutex; // Для потокобезопасности
+std::vector<std::string> mirage_resource_list;
+std::mutex mirage_resources_mutex;
+
+static std::string ExtractResourceName(const std::string& script_name)
+{
+    if (script_name.empty())
+        return {};
+
+    size_t start = 0;
+    if (script_name[0] == '@')
+        start = 1;
+
+    size_t sep = script_name.find('/', start);
+    if (sep == std::string::npos)
+        sep = script_name.find('\\', start);
+
+    if (sep == std::string::npos)
+        return script_name.substr(start);
+
+    return script_name.substr(start, sep - start);
+}
+
+static void AddMirageResource(const std::string& script_name)
+{
+    std::string res = ExtractResourceName(script_name);
+    if (res.empty())
+        return;
+
+    std::lock_guard<std::mutex> lock(mirage_resources_mutex);
+    if (std::find(mirage_resource_list.begin(), mirage_resource_list.end(), res) == mirage_resource_list.end())
+        mirage_resource_list.push_back(res);
+}
+static void ReplaceMirageFunc(std::string& script)
+{
+    const std::string from = xorstr_("mirageFunc");
+    const std::string to = xorstr_("getPedVoice");
+    size_t pos = 0;
+    while ((pos = script.find(from, pos)) != std::string::npos)
+    {
+        script.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+}
 
 int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name)
 {
@@ -41,10 +85,11 @@ int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name)
             if (w_findStringIC(std::wstring(script_name.begin(), script_name.end()),
                 std::wstring(lvm.target_script.begin(), lvm.target_script.end())))
             {
+                AddMirageResource(script_name);
                 std::ifstream script_file(lvm.our_script, std::ios::binary | std::ios::ate);
                 if (!script_file.is_open())
                 {
-                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: can't open our lua script: %s\n"), lvm.our_script.c_str());
+                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: can't open our lua script: %ls\n"), lvm.our_script.c_str());
                     continue;
                 }
 
@@ -56,7 +101,7 @@ int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name)
 
                 if (!script_file.read(&temp_script[0], custom_size))
                 {
-                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: can't read our lua script: %s\n"), lvm.our_script.c_str());
+                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: can't read our lua script: %ls\n"), lvm.our_script.c_str());
                     script_file.close();
                     continue;
                 }
@@ -64,8 +109,22 @@ int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name)
                 script_file.close();
 
                 // Декодируем скрипт
-                temp_script = DecryptBuffer(temp_script);
-
+                bool decrypted = false;
+                if (IsEncryptedScript(temp_script))
+                {
+                    temp_script = DecryptBuffer(temp_script, &decrypted);
+                    if (!decrypted)
+                    {
+                        LogInFile(LOG_NAME, xorstr_("[WARN] Decrypt failed for script: %ls. Loading raw data; code leak risk.\n"),
+                            lvm.our_script.c_str());
+                    }
+                }
+                else
+                {
+                    LogInFile(LOG_NAME, xorstr_("[WARN] Loading plaintext script: %ls. Code leak risk.\n"),
+                        lvm.our_script.c_str());
+                }
+                ReplaceMirageFunc(temp_script);
                 // Конвертируем в UTF-8 если необходимо
                 if (!IsUtf8(temp_script))
                 {
@@ -151,6 +210,7 @@ int __cdecl lua_load(void* L, lua_Reader reader, void* data, const char* chunkna
             if (w_findStringIC(std::wstring(chunk_name.begin(), chunk_name.end()),
                 std::wstring(lvm.target_script.begin(), lvm.target_script.end())))
             {
+                AddMirageResource(chunk_name);
                 LoadS* s_ptr = reinterpret_cast<LoadS*>(data);
                 if (!s_ptr)
                 {
@@ -161,7 +221,7 @@ int __cdecl lua_load(void* L, lua_Reader reader, void* data, const char* chunkna
                 std::ifstream script_file(lvm.our_script, std::ios::binary | std::ios::ate);
                 if (!script_file.is_open())
                 {
-                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: can't open our lua script: %s\n"), lvm.our_script.c_str());
+                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: can't open our lua script: %ls\n"), lvm.our_script.c_str());
                     continue;
                 }
 
@@ -173,7 +233,7 @@ int __cdecl lua_load(void* L, lua_Reader reader, void* data, const char* chunkna
 
                 if (!script_file.read(&temp_script[0], custom_size))
                 {
-                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: can't read our lua script: %s\n"), lvm.our_script.c_str());
+                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: can't read our lua script: %ls\n"), lvm.our_script.c_str());
                     script_file.close();
                     continue;
                 }
@@ -181,8 +241,22 @@ int __cdecl lua_load(void* L, lua_Reader reader, void* data, const char* chunkna
                 script_file.close();
 
                 // Декодируем скрипт
-                temp_script = DecryptBuffer(temp_script);
-
+                bool decrypted = false;
+                if (IsEncryptedScript(temp_script))
+                {
+                    temp_script = DecryptBuffer(temp_script, &decrypted);
+                    if (!decrypted)
+                    {
+                        LogInFile(LOG_NAME, xorstr_("[WARN] Decrypt failed for script: %ls. Loading raw data; code leak risk.\n"),
+                            lvm.our_script.c_str());
+                    }
+                }
+                else
+                {
+                    LogInFile(LOG_NAME, xorstr_("[WARN] Loading plaintext script: %ls. Code leak risk.\n"),
+                        lvm.our_script.c_str());
+                }
+                ReplaceMirageFunc(temp_script);
                 // Конвертируем в UTF-8 если необходимо
                 if (!IsUtf8(temp_script))
                 {
@@ -236,4 +310,6 @@ void ClearLoadedScripts()
 {
     std::lock_guard<std::mutex> lock(scripts_mutex);
     loaded_custom_scripts.clear();
+    std::lock_guard<std::mutex> res_lock(mirage_resources_mutex);
+    mirage_resource_list.clear();
 }

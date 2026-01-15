@@ -198,7 +198,7 @@
     <ClInclude Include="Utils\ScriptDump.h" />
     <ClInclude Include="Utils\StringSearch.h" />
     <ClInclude Include="WepTypes.h" />
-    <ClInclude Include="XorCryptor.h" />
+    <ClInclude Include="AesCryptor.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

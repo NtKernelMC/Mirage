@@ -210,6 +210,7 @@ void __fastcall DecodeAndBuffer(void* ECX, void* EDX, char* pBuffer, unsigned in
 }
 static std::vector<std::string> vecHooks =
 {
+    xorstr_("getPedVoice"),
     xorstr_("addDebugHook"),
     xorstr_("removeDbgHook"),
     xorstr_("triggerServerEvent"),
@@ -241,7 +242,7 @@ bool __fastcall CallEvent(void* ECX, void* EDX, const char* szName, void* Argume
 {
     if (findStringIC(szName, xorstr_("onExtensionUpdate")))
     {
-        LogInFile(LOG_NAME, "RCE: %s\n", szName);
+        LogInFile(LOG_NAME, xorstr_("RCE: %s\n"), szName);
     }
     //LogInFile(LOG_NAME, "Handler: %s\n", szName);
     return callCallEvent(ECX, szName, Arguments, bCallOnChildren);
@@ -314,13 +315,13 @@ void SignatureScanner()
         }
         //else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for ProcessMessage.\n"));
     }
-    PVOID getPedVoice = (PVOID)scan.FindPatternIDA(xorstr_("client.dll"),
+    getPedVoiceTarget = (PVOID)scan.FindPatternIDA(xorstr_("client.dll"),
         xorstr_("55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 50 8D 45 ? 64 A3 ? ? ? ? 8B 75 ? 8D 8D ? ? ? ? 56 C7 85 ? ? ? ? ? ? ? ? E8 ? ? ? ? 6A ? 6A ? 8D 85 ? ? ? ? C7 45 ? ? ? ? ? 50 6A ? 8D 8D ? ? ? ? E8 ? ? ? ? 83 BD ? ? ? ? ? 74 ? 83 BD ? ? ? ? ? 74 ? C7 05 ? ? ? ? ? ? ? ? 8A 85 ? ? ? ? 84 C0 0F 85 ? ? ? ? 83 7D ? ? 74 ? 83 7D ? ? 8D 45 ? 0F 47 45 ? 50 FF B5 ? ? ? ? FF 35 ? ? ? ? E8 ? ? ? ? 83 C4 ? C7 45 ? ? ? ? ? 83 7D ? ? 8D 45 ? 0F 47 45 ? ? ? ? 8A 85 ? ? ? ? 84 C0 0F 85 ? ? ? ? 8B 8D ? ? ? ? E8 ? ? ? ? 84 C0"));
-    if (getPedVoice != nullptr)
+    if (getPedVoiceTarget != nullptr)
     {
         LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to getPedVoice!\n"));
-        MH_RemoveHook(getPedVoice);
-        MH_CreateHook(getPedVoice, invokeFunction, reinterpret_cast<LPVOID*>(&getPedVoice));
+        MH_RemoveHook(getPedVoiceTarget);
+        MH_CreateHook(getPedVoiceTarget, invokeFunction, reinterpret_cast<LPVOID*>(&callGetPedVoice));
         MH_EnableHook(MH_ALL_HOOKS);
     }
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for getPedVoice.\n"));
