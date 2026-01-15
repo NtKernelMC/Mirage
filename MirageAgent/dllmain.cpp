@@ -71,18 +71,6 @@ void AsyncThread()
 		else LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW export is NULL!\n"));
 	}
     else LogInFile(LOG_NAME, xorstr_("[LOG] GetModuleHandleA to kernel32.dll module is NULL!\n"));
-    static bool tarantul = false;
-    while (true)
-    {
-        //if (GetModuleHandleA(xorstr_("client.dll")) && tarantul) PlayerModInfoRealDoS();
-        if (GetModuleHandleA(xorstr_("client.dll")) && GetAsyncKeyState(VK_DELETE))
-        {
-            MessageBeep(MB_ICONERROR);
-            SplitPacket(0x8000);
-            Sleep(150);
-        }
-        Sleep(10);
-    }
 }
 
 __forceinline void AsyncBitch()

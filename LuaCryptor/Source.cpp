@@ -82,9 +82,9 @@ bool DecryptAesBuffer(BYTE* buf, DWORD& len)
 
 // ────────────────────────────────────────────────
 // 3. Тройной XOR‑encrypt (как раньше)
-constexpr BYTE XOR_KEY1 = 0x12;
-constexpr BYTE XOR_KEY2 = 0x34;
-constexpr BYTE XOR_KEY3 = 0x56;
+constexpr unsigned char XOR_KEY1 = 0x22;
+constexpr unsigned char XOR_KEY2 = 0x69;
+constexpr unsigned char XOR_KEY3 = 0x95;
 
 bool XorEncryptFile(const std::string& path)
 {

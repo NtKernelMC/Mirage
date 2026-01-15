@@ -187,6 +187,16 @@
     <ClInclude Include="Signatures.h" />
     <ClInclude Include="sigscan.h" />
     <ClInclude Include="Utils.h" />
+    <ClInclude Include="Utils\Encoding.h" />
+    <ClInclude Include="Utils\FileSystem.h" />
+    <ClInclude Include="Utils\Hooking.h" />
+    <ClInclude Include="Utils\InputUtils.h" />
+    <ClInclude Include="Utils\LuaCommands.h" />
+    <ClInclude Include="Utils\LuaHelpers.h" />
+    <ClInclude Include="Utils\Logging.h" />
+    <ClInclude Include="Utils\NetPackets.h" />
+    <ClInclude Include="Utils\ScriptDump.h" />
+    <ClInclude Include="Utils\StringSearch.h" />
     <ClInclude Include="WepTypes.h" />
     <ClInclude Include="XorCryptor.h" />
   </ItemGroup>

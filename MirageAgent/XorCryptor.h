@@ -1,7 +1,7 @@
 // Определяем три HEX ключа для XOR-шифрования/дешифрования
-constexpr unsigned char XOR_KEY1 = 0x12;
-constexpr unsigned char XOR_KEY2 = 0x34;
-constexpr unsigned char XOR_KEY3 = 0x56;
+constexpr unsigned char XOR_KEY1 = 0x22;
+constexpr unsigned char XOR_KEY2 = 0x69;
+constexpr unsigned char XOR_KEY3 = 0x95;
 
 // Функция для дешифрования буфера (так как XOR симметричен, та же логика применима и для шифрования)
 std::string DecryptBuffer(const std::string& input)
