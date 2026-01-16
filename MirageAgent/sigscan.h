@@ -95,6 +95,7 @@ public:
     DWORD FindPatternIDA(const char* module, const std::string& pattern)
     {
         MODULEINFO mInfo = GetModuleInfo(module);
+        if (mInfo.lpBaseOfDll == nullptr) return 0;
         DWORD base = (DWORD)mInfo.lpBaseOfDll;
         DWORD size = (DWORD)mInfo.SizeOfImage;
 

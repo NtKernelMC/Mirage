@@ -350,7 +350,7 @@ void SignatureScanner()
         xorstr_("xxxxxx????xxxxxxxxxxxxxx????xxxxxxxxxxxxxxxxxxx"));
     if (callAddDebugHook != NULL)
     {
-       if (!DbgHook && mirage.hwbp_hooking != HookingType::IAT)
+       if (!DbgHook && mirage.hwbp_hooking != HookingType::IAT && mirage.injection_type != LuaInjectionType::METHOD_EXOTIC)
        {
            HWBP::InstallHWBP((DWORD)callAddDebugHook, (DWORD)&AddDebugHook);
            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to AddDebugHook!\n"));
@@ -457,6 +457,10 @@ void SignatureScanner()
             if (mirage.hwbp_hooking == HookingType::HWBP_HOOK) HWBP::InstallHWBP((DWORD)call_lua_load, (DWORD)&lua_load);
         }
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a sig for Lua Engine.\n"));
+    }
+    if (mirage.injection_type == LuaInjectionType::METHOD_EXOTIC)
+    {
+        SetupExoticLuaHooks();
     }
     if (mirage.fuck_dbg_hooks == FuckDbgHooksMode::STEALTH_MODE)
     {

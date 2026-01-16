@@ -55,15 +55,22 @@ void RemoveOldDumpedScripts(std::string dir_name)
 	}
 }
 
-void DumpScript(std::string dir_name, std::string name, char* buff, size_t sz)
+static int g_dump_script_ctr = 1;
+
+static std::string BuildDumpPath(const std::string& dir_name, const std::string& name, int ctr)
 {
-	static int ictr = 1;
-	char ctr[10]; memset(ctr, 0, sizeof(ctr));
-	sprintf(ctr, xorstr_("a%d_"), ictr);
+	char ctr_buf[10]; memset(ctr_buf, 0, sizeof(ctr_buf));
+	sprintf(ctr_buf, xorstr_("a%d_"), ctr);
 	std::string clean_name = CleanScriptName(name);
 	char cwd[500]; memset(cwd, 0, sizeof(cwd));
 	sprintf(cwd, xorstr_("%ls\\%s"), lua_scripts_dir.c_str(), dir_name.c_str());
-	std::string script_path = cwd + std::string(xorstr_("\\")) + (ctr + clean_name);
+	return cwd + std::string(xorstr_("\\")) + (ctr_buf + clean_name);
+}
+
+std::string DumpScriptEx(std::string dir_name, std::string name, char* buff, size_t sz)
+{
+	int ctr = g_dump_script_ctr++;
+	std::string script_path = BuildDumpPath(dir_name, name, ctr);
 	FILE* hFile = fopen(script_path.c_str(), xorstr_("wb"));
 	if (hFile != nullptr)
 	{
@@ -71,16 +78,21 @@ void DumpScript(std::string dir_name, std::string name, char* buff, size_t sz)
 		fclose(hFile);
 	}
 	else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t dump file: %s\n"), script_path.c_str());
-	ictr++;
+	return script_path;
+}
+
+void DumpScript(std::string dir_name, std::string name, char* buff, size_t sz)
+{
+	DumpScriptEx(dir_name, name, buff, sz);
 }
 
 // Skip dumping chunks with a checksum that was already seen.
-void DumpIfNotDuplicate(const char* path, const char* name, char* buff, size_t sz) {
+std::string DumpIfNotDuplicateEx(const char* path, const char* name, char* buff, size_t sz) {
 	uint32_t currentChecksum = CalculateChecksum(buff, sz);
 
 	// If the checksum already exists, skip the dump.
 	if (dumpedChunkChecksums.find(currentChecksum) != dumpedChunkChecksums.end()) {
-		return; // Chunk already exists.
+		return ""; // Chunk already exists.
 	}
 
 	// Store the checksum to avoid duplicates.
@@ -91,5 +103,10 @@ void DumpIfNotDuplicate(const char* path, const char* name, char* buff, size_t s
 	dumpedChunks.push_back(chunk);
 
 	// Call the original dump function.
-	DumpScript(path, name, buff, sz);
+	return DumpScriptEx(path, name, buff, sz);
+}
+
+// Skip dumping chunks with a checksum that was already seen.
+void DumpIfNotDuplicate(const char* path, const char* name, char* buff, size_t sz) {
+	DumpIfNotDuplicateEx(path, name, buff, sz);
 }

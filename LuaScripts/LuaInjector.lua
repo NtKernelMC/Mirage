@@ -254,7 +254,7 @@ function CreateGUI()
     local ww, wh = 600, 520
     local wx, wy = (sw - ww) / 2, (sh - wh) / 2
 
-    wnd = guiCreateWindow(wx, wy, ww, wh, "Проект Мираж by DroidZero | Build V6.1", false)
+    wnd = guiCreateWindow(wx, wy, ww, wh, "Проект Мираж by DroidZero | Build V6.2", false)
     guiWindowSetSizable(wnd, false)
     guiWindowSetMovable(wnd, true)
 

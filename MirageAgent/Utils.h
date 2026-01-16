@@ -10,7 +10,7 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("V6.1") // Версия инжектора
+#define MIRAGE_VERSION xorstr_("V6.2") // Версия инжектора
 #define TO_ELEMENTID(x) ((ElementID) reinterpret_cast < unsigned long > (x) )
 #include <Windows.h>
 #include <stdio.h>
@@ -226,6 +226,7 @@ enum class LuaInjectionType
 {
 	METHOD_LUA_L_LOAD = 0,
 	METHOD_LUA_L_LOADBUFFER = 1,
+	METHOD_EXOTIC = 2,
 };
 
 enum class ForkVersion

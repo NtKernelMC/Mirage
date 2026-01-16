@@ -38,6 +38,7 @@ enum class LuaInjectionType
 {
     METHOD_LUA_L_LOAD = 0,
     METHOD_LUA_L_LOADBUFFER = 1,
+    METHOD_EXOTIC = 2,
 };
 
 enum class ForkVersion
@@ -199,6 +200,8 @@ void ParseMirageConfig()
                 mirage.injection_type = LuaInjectionType::METHOD_LUA_L_LOAD;
             else if (value == xorstr_("METHOD_LUA_L_LOADBUFFER"))
                 mirage.injection_type = LuaInjectionType::METHOD_LUA_L_LOADBUFFER;
+            else if (value == xorstr_("METHOD_EXOTIC") || value == xorstr_("EXOTIC"))
+                mirage.injection_type = LuaInjectionType::METHOD_EXOTIC;
             else
             {
                 LogInFile(LOG_NAME, xorstr_("[LOG] Error: invalid LUA_INJECTION_TYPE value!\n"));
@@ -245,11 +248,22 @@ void ParseMirageConfig()
         else if (key == xorstr_("HOOKING_METHOD"))
         {
             if (value == xorstr_("HWBP_HOOK"))
+            {
                 mirage.hwbp_hooking = HookingType::HWBP_HOOK;
+            }
             else if (value == xorstr_("INLINE_JUMP"))
+            {
                 mirage.hwbp_hooking = HookingType::INLINE_JUMP;
+            }
             else if (value == xorstr_("IAT"))
-                mirage.hwbp_hooking = HookingType::IAT;
+            {
+                if (mirage.injection_type == LuaInjectionType::METHOD_EXOTIC)
+                {
+                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: METHOD_EXOTIC is not compatible with IAT hook!\n[LOG] Reset to INLINE_JUMP...\n"));
+                    mirage.hwbp_hooking = HookingType::INLINE_JUMP;
+                }
+                else mirage.hwbp_hooking = HookingType::IAT;
+            }
             else
             {
                 LogInFile(LOG_NAME, xorstr_("[LOG] Error: invalid HOOKING_METHOD value!\n"));
