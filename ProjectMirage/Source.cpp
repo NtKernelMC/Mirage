@@ -132,7 +132,7 @@ int main()
         }
     }
     LogInFile(LOG_NAME, xorstr_("Запущен процесс GTA:SA! PID: %d\n"), proc_id);
-    FuckObCallbacks();
+    if (!FuckObCallbacks(420)) FuckObCallbacks(412);
 	HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, proc_id);
     if (hProc != nullptr)
     {

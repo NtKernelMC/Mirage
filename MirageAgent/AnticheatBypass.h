@@ -180,8 +180,8 @@ namespace ModernBypass
 		
 		if (packetId == 4 || packetId == 19)
 		{
-			std::string public_serial = xorstr_("75573D795A9FD005B64C67C16B158494"); // v15
-			std::string private_serial = xorstr_("0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF");
+			/*std::string public_serial = xorstr_("9C4A71F2E6D0B8A53F1E0C6D42B7AE95"); // v15
+			std::string private_serial = xorstr_("7E4A9C0F2D8B6E13A5F1C97D04B8E6A3F5C2D9B147E0A86F4C1D35E92");
 
 			const size_t totalBytes = (bitLength + 7) >> 3;
 			if (totalBytes < 3 + 32 + 2)
@@ -213,7 +213,7 @@ namespace ModernBypass
 			memcpy(packet + private_off, priv_enc, private_len);
 
 			LogInFile(LOG_NAME, xorstr_("[RAKNET] PacketID: %d\n[RAKNET] Public Serial (v15): %s\n[RAKNET] Private Serial: %s\n"),
-				packetId, public_serial.c_str(), private_serial.c_str());
+				packetId, public_serial.c_str(), private_serial.c_str());*/
 		}
 
 		if ((packetId >= 91 && packetId <= 94) || (packetId == 34 || packetId == 25)) return 1;
@@ -232,9 +232,27 @@ namespace ModernBypass
 		}
 		oShowErrorMessageBox(self, strTitle, strMessage, strTroubleLink);
 	}
+	using ptr_moris_hook_scanner = uint8_t * (__stdcall*)(uint8_t* a1);
+	static ptr_moris_hook_scanner call_moris_hook_scanner = nullptr;
+
+	static uint8_t* __stdcall moris_hook_scanner(uint8_t* a1)
+	{
+		return a1;
+	}
 	void EvadeAnticheat()
 	{
 		SigScan scan; MessageBeep(MB_ICONASTERISK);
+		call_moris_hook_scanner = (ptr_moris_hook_scanner)scan.FindPatternIDA(xorstr_("core.dll"),
+			xorstr_("55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? A1 ? ? ? ? 33 C5 89 45 ? 56 50 8D 45 ? 64 A3 ? ? ? ? 8B 75 ? 89 4D"));
+		if (call_moris_hook_scanner)
+		{
+			MH_RemoveHook(call_moris_hook_scanner);
+			MH_CreateHook(call_moris_hook_scanner, &moris_hook_scanner, reinterpret_cast<LPVOID*>(&call_moris_hook_scanner));
+			MH_EnableHook(MH_ALL_HOOKS);
+			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to AC_SCAN!\n"));
+		}
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for AC_SCAN.\n"));
+		
 		oShowErrorMessageBox = (tShowErrorMessageBox)scan.FindPatternIDA(xorstr_("core.dll"),
 			xorstr_("55 8B EC 6A FF 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 56 57 A1 ? ? ? ? 33 C5 50 8D 45 F4 64 A3 ? ? ? ? 8B 7D 08"));
 		if (oShowErrorMessageBox)
@@ -247,9 +265,9 @@ namespace ModernBypass
 		xorstr_("55 8B EC 53 56 8B F1 57 8D 8E"));
 		if (callRakPeer_QueueBufferedPacket != nullptr)
 		{
-			//MH_RemoveHook(callRakPeer_QueueBufferedPacket);
-			//MH_CreateHook(callRakPeer_QueueBufferedPacket, &RakPeer_QueueBufferedPacket, reinterpret_cast<LPVOID*>(&callRakPeer_QueueBufferedPacket));
-			//MH_EnableHook(MH_ALL_HOOKS);
+			MH_RemoveHook(callRakPeer_QueueBufferedPacket);
+			MH_CreateHook(callRakPeer_QueueBufferedPacket, &RakPeer_QueueBufferedPacket, reinterpret_cast<LPVOID*>(&callRakPeer_QueueBufferedPacket));
+			MH_EnableHook(MH_ALL_HOOKS);
 			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to RakPeer_QueueBufferedPacket!\n"));
 		}
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for RakPeer_QueueBufferedPacket.\n"));
@@ -305,14 +323,14 @@ namespace ModernBypass
 		}
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #2.\n"));
 
-		/*target = reinterpret_cast<LPVOID>(scan.FindPatternIDA(xorstr_("netc.dll"),
+		target = reinterpret_cast<LPVOID>(scan.FindPatternIDA(xorstr_("netc.dll"),
 			xorstr_("55 8B EC 6A FF 68 ? ? ? ? 64 A1 00 00 00 00 50 83 EC 64 A1 ? ? ? ? 33 C5 89 45 F0 56 57 50 8D 45 F4 64 A3 00 00 00 00 8B F1 50 B8 FE 14 71 4B B8 DE 2C EB 61 B8 8E 82 D9 85 B8 C2 CC B3 92 B8 3E A4 D9")));
 		if (target)
 		{
 			MH_CreateHook(target, &hkAcSecurityViolationKick, nullptr);
 			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to ByPass Component #3!\n"));
 		}
-		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #3.\n"));*/
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #3.\n"));
 
 		target = reinterpret_cast<LPVOID>(scan.FindPatternIDA(xorstr_("netc.dll"),
 			xorstr_("55 8B EC 6A FF 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 F0 56 57 50 8D 45 F4 64 A3 ? ? ? ? 8B F9 89 7D 84 50")));
@@ -332,14 +350,14 @@ namespace ModernBypass
 		}
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #5.\n"));
 
-		/*target = reinterpret_cast<LPVOID>(scan.FindPatternIDA(xorstr_("netc.dll"),
+		target = reinterpret_cast<LPVOID>(scan.FindPatternIDA(xorstr_("netc.dll"),
 			xorstr_("55 8B EC 6A FF 68 ? ? ? ? 64 A1 00 00 00 00 50 83 EC 34 A1 ? ? ? ? 33 C5 89 45 F0 56 57 50 8D 45 F4 64 A3 00 00 00 00 8B F1 50 B8 1E 22 84 8E B8 22 59 21 B2 B8 FE")));
 		if (target)
 		{
 			MH_CreateHook(target, &hkSetClientKick, nullptr);
 			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to ByPass Component #6!\n"));
 		}
-		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #6.\n"));*/
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #6.\n"));
 
 		target = reinterpret_cast<LPVOID>(scan.FindPatternIDA(xorstr_("netc.dll"),
 			xorstr_("53 8B DC 83 EC ? 83 E4 ? 83 C4 ? 55 8B 6B ? 89 6C 24 ? 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B F9 89 BD ? ? ? ? 50 B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? 58 83 7B")));
@@ -368,14 +386,14 @@ namespace ModernBypass
 		}
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #9.\n"));
 
-		/*target = reinterpret_cast<LPVOID>(scan.FindPatternIDA(xorstr_("netc.dll"),
+		target = reinterpret_cast<LPVOID>(scan.FindPatternIDA(xorstr_("netc.dll"),
 			xorstr_("53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B 04 89 6C 24 04 8B EC 6A FF 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 EC 56 57 50 8D 45 F4 64 A3 ? ? ? ? 89 8D ? ? ? ? 8B 7B 08 33 C0")));
 		if (target)
 		{
 			MH_CreateHook(target, &hkScanModuleIntegrity, nullptr);
 			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to ByPass Component #10!\n"));
 		}
-		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #10.\n"));*/
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find address for signature to ByPass Component #10.\n"));
 	}
 };
 namespace LegacyBypass

@@ -52,7 +52,7 @@ void AsyncThread()
     callGetThreadContext = (ptrGetThreadContext)GetProcAddress(GetModuleHandleA(xorstr_("kernel32.dll")), xorstr_("GetThreadContext"));
     if (callGetThreadContext != nullptr)
     {
-        if ((!DbgHook || mirage.hwbp_hooking == HookingType::HWBP_HOOK) && mirage.hwbp_hooking != HookingType::IAT && mirage.injection_type != LuaInjectionType::METHOD_EXOTIC)
+        if ((!DbgHook || mirage.hwbp_hooking == HookingType::HWBP_HOOK) && mirage.hwbp_hooking != HookingType::IAT && (mirage.injection_type != LuaInjectionType::METHOD_EXOTIC || mirage.hwbp_hooking == HookingType::HWBP_HOOK))
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] GetThreadContext is Hooked!\n"));
             MakeJump((DWORD)callGetThreadContext, (DWORD)hookGetThreadContext, thread_prologue, sizeof(thread_prologue));

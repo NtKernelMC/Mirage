@@ -394,7 +394,7 @@ static uint32_t FairplayHash(const uint8_t* data, size_t len)
     return h;
 }
 
-void FuckObCallbacks()
+bool FuckObCallbacks(uint32_t magic)
 {
     const wchar_t* devicePath = xorstr_(L"\\\\.\\FairplayKD0");
     HANDLE h = CreateFileW(devicePath, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -403,13 +403,12 @@ void FuckObCallbacks()
         DWORD errorik = GetLastError();
         if (errorik == 2) LogInFile(LOG_NAME, xorstr_("FairplayKD драйвер не запущен!\n"));
         else LogInFile(LOG_NAME, xorstr_("CreateFile failed: %d\n"), errorik);
-        return;
+        return false;
     }
 
     // Build IOCTL 153 packet
     // [cmd_id][magic][flagA][flagB][hash]
     uint32_t cmd_id = 153;
-    uint32_t magic = 420;
     uint32_t flagA = 1; // example: enable
     uint32_t flagB = 0; // example: disable
 
@@ -437,9 +436,10 @@ void FuckObCallbacks()
     {
         LogInFile(LOG_NAME, xorstr_("DeviceIoControl failed: %d\n"), GetLastError());
         CloseHandle(h);
-        return;
+        return false;
     }
     else LogInFile(LOG_NAME, xorstr_("FairPlay driver is fucked and owned!!!\n"));
 
     CloseHandle(h);
+    return true;
 }

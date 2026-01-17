@@ -1030,6 +1030,7 @@ void SetupExoticLuaHooks()
     if (!call_luaZ_fill)
     {
         call_luaZ_fill = (ptr_luaZ_fill)scan.FindPatternIDA(xorstr_("lua5.1c.dll"), xorstr_("55 8B EC 56 8B 75 ? 83 7E ? ? 75"));
+        if (call_luaZ_fill == nullptr) call_luaZ_fill = (ptr_luaZ_fill)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("55 8B EC 51 56 68"));
         if (call_luaZ_fill)
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to EXOTIC_1!\n"));
@@ -1042,6 +1043,7 @@ void SetupExoticLuaHooks()
     if (!call_luaX_setinput)
     {
         call_luaX_setinput = (ptr_luaX_setinput)scan.FindPatternIDA(xorstr_("lua5.1c.dll"), xorstr_("55 8B EC 8B 45 ? 8B 4D ? 56 8B 75"));
+        if (call_luaX_setinput == nullptr) call_luaX_setinput = (ptr_luaX_setinput)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("89 94 14 ? ? ? ? 66 F7 D9"));
         if (call_luaX_setinput)
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to EXOTIC_2!\n"));
@@ -1054,6 +1056,7 @@ void SetupExoticLuaHooks()
     if (!call_luaD_protectedparser)
     {
         call_luaD_protectedparser = (ptr_luaD_protectedparser)scan.FindPatternIDA(xorstr_("lua5.1c.dll"), xorstr_("55 8B EC 83 EC ? 8B 45 ? 53 56"));
+        if (call_luaD_protectedparser == nullptr) call_luaD_protectedparser = (ptr_luaD_protectedparser)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("98 66 81 F1"));
         if (call_luaD_protectedparser)
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to EXOTIC_3!\n"));
@@ -1071,6 +1074,18 @@ void SetupExoticLuaHooks()
             exotic_logged_not_found = true;
             LogInFile(LOG_NAME, xorstr_("[ERROR] EXOTIC_1/EXOTIC_2 not found.\n"));
         }
+        return;
+    }
+
+    if (mirage.hwbp_hooking == HookingType::HWBP_HOOK)
+    {
+        HWBP::InstallHWBP((DWORD)call_luaZ_fill, (DWORD)&hkLuaZFill);
+        HWBP::InstallHWBP((DWORD)call_luaX_setinput, (DWORD)&hkLuaXSetInput);
+        if (call_luaD_protectedparser)
+        {
+            HWBP::InstallHWBP((DWORD)call_luaD_protectedparser, (DWORD)&hkLuaDProtectedParser);
+        }
+        exotic_hooks_ready = true;
         return;
     }
 
