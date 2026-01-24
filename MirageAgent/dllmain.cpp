@@ -16,6 +16,7 @@ ptrExitProcess callExitProcess = nullptr;
 void __stdcall hkExitProcess(UINT uExitCode) {}
 void AsyncThread()
 {
+    //DROID_VM_START();
     MH_Initialize();
     
     // Хуй найдут пидоры
@@ -58,7 +59,7 @@ void AsyncThread()
             MakeJump((DWORD)callGetThreadContext, (DWORD)hookGetThreadContext, thread_prologue, sizeof(thread_prologue));
         }
     }
-	HMODULE hKernel32 = GetModuleHandleA(xorstr_("kernel32.dll"));
+	HMODULE hKernel32 = GetModuleHandleA(xorstr_("kernelbase.dll")); //kernel32
 	if (hKernel32)
 	{
 		callLoadLibraryExW = (ptrLoadLibraryExW)GetProcAddress(hKernel32, xorstr_("LoadLibraryExW"));
@@ -71,6 +72,7 @@ void AsyncThread()
 		else LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW export is NULL!\n"));
 	}
     else LogInFile(LOG_NAME, xorstr_("[LOG] GetModuleHandleA to kernel32.dll module is NULL!\n"));
+    //DROID_VM_FINISH();
 }
 
 __forceinline void AsyncBitch()

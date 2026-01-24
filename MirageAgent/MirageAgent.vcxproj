@@ -99,7 +99,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <AdditionalIncludeDirectories>C:\Users\RAID\source\repos\Mirage\MirageAgent\magic_enum;C:\Users\RAID\source\repos\Mirage\MirageAgent\NetAPI\utils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\RAID\source\repos\DroidV\SDK;C:\Users\RAID\source\repos\Mirage\MirageAgent\magic_enum;C:\Users\RAID\source\repos\Mirage\MirageAgent\NetAPI\utils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <CompileAs>CompileAsCpp</CompileAs>
     </ClCompile>
     <Link>
@@ -184,6 +184,7 @@
     <ClInclude Include="Nirmata.h" />
     <ClInclude Include="Registry.h" />
     <ClInclude Include="ScriptConfig.h" />
+    <ClInclude Include="ShadowTrace.h" />
     <ClInclude Include="Signatures.h" />
     <ClInclude Include="sigscan.h" />
     <ClInclude Include="Utils.h" />

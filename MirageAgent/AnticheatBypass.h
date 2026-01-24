@@ -1,3 +1,6 @@
+п»ї#include "ShadowTrace.h"
+#include <unordered_set>
+
 namespace ModernBypass
 {
 	typedef bool(__thiscall* ptrSendPacket)(void* ECX, unsigned char ucPacketID, void* bitStream, int packetPriority, int packetReliability, int packetOrdering);
@@ -180,7 +183,7 @@ namespace ModernBypass
 		
 		if (packetId == 4 || packetId == 19)
 		{
-			/*std::string public_serial = xorstr_("9C4A71F2E6D0B8A53F1E0C6D42B7AE95"); // v15
+			std::string public_serial = xorstr_("9C4A71F2E6D0B8A53F1E0C6D42B7AE95"); // v15
 			std::string private_serial = xorstr_("7E4A9C0F2D8B6E13A5F1C97D04B8E6A3F5C2D9B147E0A86F4C1D35E92");
 
 			const size_t totalBytes = (bitLength + 7) >> 3;
@@ -200,7 +203,7 @@ namespace ModernBypass
 				LogInFile(LOG_NAME, xorstr_("[ERROR] QueueBufferedPacket - Invalid public serial (v15 mode).\n"));
 				return 0;
 			}
-			memcpy(packet + public_off, public_enc, 32);
+			//memcpy(packet + public_off, public_enc, 32);
 
 			const size_t private_len = 64;
 			size_t private_off = public_off + public_len + 2;
@@ -210,27 +213,11 @@ namespace ModernBypass
 			ApplyD4Cipher(priv_enc, private_len);
 
 			PrintPrivEncryptedDecryptedAsString(packet, private_off, private_len);
-			memcpy(packet + private_off, priv_enc, private_len);
-
-			LogInFile(LOG_NAME, xorstr_("[RAKNET] PacketID: %d\n[RAKNET] Public Serial (v15): %s\n[RAKNET] Private Serial: %s\n"),
-				packetId, public_serial.c_str(), private_serial.c_str());*/
+			//memcpy(packet + private_off, priv_enc, private_len);
 		}
 
 		if ((packetId >= 91 && packetId <= 94) || (packetId == 34 || packetId == 25)) return 1;
 		return callRakPeer_QueueBufferedPacket(ECX, payload, bitLength, priority, reliability, orderingChannel, targetIp, targetPort, broadcast, receiptNumber);
-	}
-	using tShowErrorMessageBox = void(__thiscall*)(void*, const std::string*, std::string, const std::string*);
-	tShowErrorMessageBox oShowErrorMessageBox = nullptr;
-	void __fastcall hkShowErrorMessageBox(void* self, void*, const std::string* strTitle, std::string strMessage, const std::string* strTroubleLink)
-	{
-		if (strTitle->find(xorstr_("CD46")) != std::string::npos || strTitle->find(xorstr_("CD09")) != std::string::npos || strTitle->find(xorstr_("CD32")) != std::string::npos)
-		{
-			strTitle = new std::string(cp1251_to_utf8("Від'єднання (CD46)"));
-			strMessage = cp1251_to_utf8("Від'єднання: Соломія Кіріяма (Заблокував вас до 21.01.2099 12:30 Причина: Я їбала твою мамку) // By I.Repetsky");
-			oShowErrorMessageBox(self, strTitle, strMessage, strTroubleLink);
-			return;
-		}
-		oShowErrorMessageBox(self, strTitle, strMessage, strTroubleLink);
 	}
 	using ptr_moris_hook_scanner = uint8_t * (__stdcall*)(uint8_t* a1);
 	static ptr_moris_hook_scanner call_moris_hook_scanner = nullptr;
@@ -239,9 +226,105 @@ namespace ModernBypass
 	{
 		return a1;
 	}
+
+	typedef int(__thiscall* ptrEncryptWmiBuffer)(void* ECX, char* buff, size_t size);
+	ptrEncryptWmiBuffer callEncryptWmiBuffer = nullptr;
+	int __fastcall EncryptWmiBuffer(void* ECX, void* EDX, char* buff, size_t size)
+	{
+		if (!buff || size == 0 || size > 0x4000) return callEncryptWmiBuffer(ECX, buff, size);
+
+		size_t n = 0;
+		while (n < size && buff[n] != '\0') ++n;
+		std::string original(buff, buff + n);
+
+		ShadowTrace::WmiFieldInfo info;
+		std::string fake;
+		if (ShadowTrace::IsUniqueWmiValue(original, &info))
+		{
+			if (info.className.empty()) info.className = "Unknown";
+			if (info.propertyName.empty()) info.propertyName = "Unknown";
+
+			fake = ShadowTrace::GetOrGenerateFake(original);
+		}
+		else if (ShadowTrace::TryGenerateNonUnique(original, info, fake))
+		{
+			if (info.className.empty()) info.className = "Unknown";
+			if (info.propertyName.empty()) info.propertyName = "Unknown";
+		}
+
+		if (!fake.empty())
+		{
+			fake = ShadowTrace::PreserveTrailingSpaces(original, fake);
+			const size_t replLen = fake.size();
+			memset(buff, 0, size);
+			const size_t toCopy = (replLen < (size - 1)) ? replLen : (size - 1);
+			memcpy(buff, fake.data(), toCopy);
+			buff[toCopy] = '\0';
+
+			LogInFile(LOG_NAME, xorstr_("[LOG] WMI Field (spoofed %s.%s): %s\n"), info.className.c_str(), info.propertyName.c_str(), fake.c_str());
+		}
+		else
+		{
+			LogInFile(LOG_NAME, xorstr_("[LOG] WMI Field: %s\n"), original.c_str());
+		}
+
+		return callEncryptWmiBuffer(ECX, buff, size);
+	}
+
+	typedef DWORD* (__cdecl* ptrCollectAdapterMacHexByName)(DWORD* a1, int a2);
+	ptrCollectAdapterMacHexByName callCollectAdapterMacHexByName = nullptr;
+
+	DWORD* __cdecl CollectAdapterMacHexByName(DWORD* a1, int a2)
+	{
+		DWORD* ret = callCollectAdapterMacHexByName(a1, a2);
+		if (!a1) return ret;
+
+		std::string* out = reinterpret_cast<std::string*>(a1);
+		if (!out || out->empty()) return ret;
+
+		if (!ShadowTrace::LooksLikeHexMac(*out, nullptr, nullptr)) return ret;
+
+		const std::string orig = *out;
+		const std::string fake = ShadowTrace::GetOrGenerateMacFake(orig);
+		if (fake.empty()) return ret;
+
+		if (fake.size() == out->size())
+		{
+			std::memcpy(&(*out)[0], fake.data(), fake.size());
+		}
+		else
+		{
+			*out = fake;
+		}
+
+		LogInFile(LOG_NAME, xorstr_("[LOG] MAC spoofed: %s -> %s\n"), orig.c_str(), fake.c_str());
+		return ret;
+	}
+
 	void EvadeAnticheat()
 	{
 		SigScan scan; MessageBeep(MB_ICONASTERISK);
+		ShadowTrace::InitWmiCacheOnce();
+		callCollectAdapterMacHexByName = (ptrCollectAdapterMacHexByName)scan.FindCallPattern(xorstr_("netc.dll"),
+			xorstr_("E8 ? ? ? ? 8D 45 ? C6 45 ? ? 50 E8 ? ? ? ? 8D 45 ? C6 45"));
+		if (callCollectAdapterMacHexByName != nullptr)
+		{
+			MH_RemoveHook(callCollectAdapterMacHexByName);
+			MH_CreateHook(callCollectAdapterMacHexByName, &CollectAdapterMacHexByName, reinterpret_cast<LPVOID*>(&callCollectAdapterMacHexByName));
+			MH_EnableHook(MH_ALL_HOOKS);
+			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to CollectAdapterMacHexByName!\n"));
+		}
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for CollectAdapterMacHexByName.\n"));
+		callEncryptWmiBuffer = (ptrEncryptWmiBuffer)scan.FindCallPattern(xorstr_("netc.dll"),
+			xorstr_("E8 ? ? ? ? C6 45 ? ? 83 C8"));
+		if (callEncryptWmiBuffer != nullptr)
+		{
+			MH_RemoveHook(callEncryptWmiBuffer);
+			MH_CreateHook(callEncryptWmiBuffer, &EncryptWmiBuffer, reinterpret_cast<LPVOID*>(&callEncryptWmiBuffer));
+			MH_EnableHook(MH_ALL_HOOKS);
+			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to EncryptWmiBuffer!\n"));
+		}
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for EncryptWmiBuffer.\n"));
 		call_moris_hook_scanner = (ptr_moris_hook_scanner)scan.FindPatternIDA(xorstr_("core.dll"),
 			xorstr_("55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? A1 ? ? ? ? 33 C5 89 45 ? 56 50 8D 45 ? 64 A3 ? ? ? ? 8B 75 ? 89 4D"));
 		if (call_moris_hook_scanner)
@@ -253,14 +336,6 @@ namespace ModernBypass
 		}
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for AC_SCAN.\n"));
 		
-		oShowErrorMessageBox = (tShowErrorMessageBox)scan.FindPatternIDA(xorstr_("core.dll"),
-			xorstr_("55 8B EC 6A FF 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 56 57 A1 ? ? ? ? 33 C5 50 8D 45 F4 64 A3 ? ? ? ? 8B 7D 08"));
-		if (oShowErrorMessageBox)
-		{
-			//MH_RemoveHook(oShowErrorMessageBox);
-			//MH_CreateHook(oShowErrorMessageBox, &hkShowErrorMessageBox, reinterpret_cast<LPVOID*>(&oShowErrorMessageBox));
-			//MH_EnableHook(MH_ALL_HOOKS);
-		}
 		callRakPeer_QueueBufferedPacket = (ptrRakPeer_QueueBufferedPacket)scan.FindPatternIDA(xorstr_("netc.dll"),
 		xorstr_("55 8B EC 53 56 8B F1 57 8D 8E"));
 		if (callRakPeer_QueueBufferedPacket != nullptr)
@@ -459,3 +534,4 @@ namespace LegacyBypass
 		}
 	}
 };
+

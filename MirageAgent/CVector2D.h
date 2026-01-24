@@ -11,7 +11,6 @@
 #include <string>
 #include <fstream>
 #include <cmath>
-using namespace std;
 
 #define FLOAT_EPSILON 0.0001f
 #pragma warning (disable : 4244)

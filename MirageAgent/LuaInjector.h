@@ -335,6 +335,20 @@ struct ExoticZio
     int eoz;
 };
 
+struct ExoticMbuffer
+{
+    char* buffer;
+    size_t n;
+    size_t buffsize;
+};
+
+struct ExoticSParser
+{
+    ExoticZio* z;
+    ExoticMbuffer buff;
+    const char* name;
+};
+
 struct ExoticScriptEntry
 {
     std::wstring target_script;
@@ -377,9 +391,11 @@ static constexpr size_t kExoticChunkSize = 4096;
 typedef int(__cdecl* ptr_luaZ_fill)(ExoticZio* z);
 typedef void(__cdecl* ptr_luaX_setinput)(void* L, void* ls, ExoticZio* z, ExoticTString* source);
 typedef int(__cdecl* ptr_luaD_protectedparser)(void* L, ExoticZio* z, const char* name);
+typedef void(__cdecl* ptr_f_parser)(void* L, void* ud);
 ptr_luaZ_fill call_luaZ_fill = nullptr;
 ptr_luaX_setinput call_luaX_setinput = nullptr;
 ptr_luaD_protectedparser call_luaD_protectedparser = nullptr;
+ptr_f_parser call_f_parser = nullptr;
 
 static size_t ExoticStrnlen(const char* s, size_t max_len)
 {
@@ -390,6 +406,41 @@ static size_t ExoticStrnlen(const char* s, size_t max_len)
         ++n;
     }
     return n;
+}
+
+static bool ExoticTryGetParserInfo(void* ud, ExoticZio*& out_z, const char*& out_name)
+{
+    if (!ud) return false;
+    __try
+    {
+        ExoticSParser* parser = reinterpret_cast<ExoticSParser*>(ud);
+        out_z = parser->z;
+        out_name = parser->name;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        out_z = nullptr;
+        out_name = nullptr;
+        return false;
+    }
+    return out_z != nullptr && out_name != nullptr;
+}
+
+static bool ExoticTryGetChunkName(const char* name, std::string& out_name)
+{
+    if (!name) return false;
+    size_t len = 0;
+    __try
+    {
+        len = ExoticStrnlen(name, 4096);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+    if (len == 0 || len >= 4096) return false;
+    out_name.assign(name, len);
+    return true;
 }
 
 static bool ExoticGetChunkName(ExoticTString* source, std::string& out_name)
@@ -909,6 +960,120 @@ int __cdecl hkLuaDProtectedParser(void* L, ExoticZio* z, const char* name)
     return call_luaD_protectedparser(L, z, name);
 }
 
+void __cdecl hkLuaFParser(void* L, void* ud)
+{
+    if (!call_f_parser)
+    {
+        return;
+    }
+
+    ExoticZio* z = nullptr;
+    const char* name = nullptr;
+    if (!ExoticTryGetParserInfo(ud, z, name))
+    {
+        call_f_parser(L, ud);
+        return;
+    }
+
+    std::string chunk_name;
+    bool name_ok = ExoticTryGetChunkName(name, chunk_name);
+    if (!name_ok)
+    {
+        std::lock_guard<std::mutex> lock(exotic_mutex);
+        auto& state = exotic_states[z];
+        if (!state.log_bad_name)
+        {
+            state.log_bad_name = true;
+        }
+    }
+
+    if (!exotic_scripts_loaded)
+    {
+        ExoticLoadScripts();
+    }
+
+    const ExoticScriptEntry* replacement = ExoticFindScript(chunk_name);
+    bool do_drain = false;
+    bool log_replace = false;
+    bool want_dump = mirage.Dumper && (mirage.DumpAllScripts || ExoticShouldDumpFull(chunk_name));
+    {
+        std::lock_guard<std::mutex> lock(exotic_mutex);
+        auto& state = exotic_states[z];
+        state.chunk_name = chunk_name;
+        state.chunk_name_known = !chunk_name.empty();
+        if (replacement)
+        {
+            state.replacement = replacement;
+            state.override_ready = true;
+            state.override_is_original = false;
+            state.override_offset = 0;
+            if (!state.log_replace)
+            {
+                state.log_replace = true;
+                log_replace = true;
+            }
+            if (mirage.Dumper && !state.drain_done)
+            {
+                state.drain_done = true;
+                do_drain = true;
+            }
+        }
+        else if (want_dump && !state.drain_done)
+        {
+            state.drain_done = true;
+            state.override_is_original = true;
+            do_drain = true;
+        }
+    }
+
+    if (replacement)
+    {
+        AddMirageResource(chunk_name);
+    }
+
+    if (log_replace)
+    {
+        LogInFile(LOG_NAME, xorstr_("[LOG] EXOTIC: replacing script for: %s\n"), chunk_name.c_str());
+    }
+
+    if (do_drain)
+    {
+        ExoticDrainOriginal(z);
+        if (!replacement)
+        {
+            std::lock_guard<std::mutex> lock(exotic_mutex);
+            auto& state = exotic_states[z];
+            if (state.override_is_original && !state.original_data.empty())
+            {
+                state.override_script = state.original_data;
+                state.override_ready = true;
+                state.override_offset = 0;
+                if (!state.compiled_checked && state.original_data.size() >= 4)
+                {
+                    state.compiled_checked = true;
+                    if (ExoticIsBytecode(state.original_data))
+                    {
+                        state.compiled = true;
+                    }
+                }
+            }
+            else
+            {
+                state.override_is_original = false;
+            }
+        }
+    }
+
+    if (replacement)
+    {
+        z->n = 0;
+        z->p = nullptr;
+        z->eoz = 0;
+    }
+
+    call_f_parser(L, ud);
+}
+
 void __cdecl hkLuaXSetInput(void* L, void* ls, ExoticZio* z, ExoticTString* source)
 {
     if (!z || !call_luaX_setinput)
@@ -1043,7 +1208,6 @@ void SetupExoticLuaHooks()
     if (!call_luaX_setinput)
     {
         call_luaX_setinput = (ptr_luaX_setinput)scan.FindPatternIDA(xorstr_("lua5.1c.dll"), xorstr_("55 8B EC 8B 45 ? 8B 4D ? 56 8B 75"));
-        if (call_luaX_setinput == nullptr) call_luaX_setinput = (ptr_luaX_setinput)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("89 94 14 ? ? ? ? 66 F7 D9"));
         if (call_luaX_setinput)
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to EXOTIC_2!\n"));
@@ -1056,7 +1220,6 @@ void SetupExoticLuaHooks()
     if (!call_luaD_protectedparser)
     {
         call_luaD_protectedparser = (ptr_luaD_protectedparser)scan.FindPatternIDA(xorstr_("lua5.1c.dll"), xorstr_("55 8B EC 83 EC ? 8B 45 ? 53 56"));
-        if (call_luaD_protectedparser == nullptr) call_luaD_protectedparser = (ptr_luaD_protectedparser)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("98 66 81 F1"));
         if (call_luaD_protectedparser)
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to EXOTIC_3!\n"));
@@ -1067,12 +1230,29 @@ void SetupExoticLuaHooks()
         }
     }
 
-    if (!call_luaZ_fill || !call_luaX_setinput)
+    if (!call_luaX_setinput && !call_luaD_protectedparser && !call_f_parser)
+    {
+        call_f_parser = (ptr_f_parser)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("55 8B EC 53 56 57 68 ? ? ? ? E9 ? ? ? ? 33 D3"));
+        if (!exotic_logged_fallback)
+        {
+            exotic_logged_fallback = true;
+            if (call_f_parser)
+            {
+                LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to EXOTIC_4 fallback.\n"));
+            }
+            else
+            {
+                LogInFile(LOG_NAME, xorstr_("[WARN] Can`t find a sig for EXOTIC_4 fallback.\n"));
+            }
+        }
+    }
+
+    if (!call_luaZ_fill || (!call_luaX_setinput && !call_f_parser))
     {
         if (!exotic_logged_not_found)
         {
             exotic_logged_not_found = true;
-            LogInFile(LOG_NAME, xorstr_("[ERROR] EXOTIC_1/EXOTIC_2 not found.\n"));
+            LogInFile(LOG_NAME, xorstr_("[ERROR] EXOTIC_1 or EXOTIC_2/EXOTIC_4 not found.\n"));
         }
         return;
     }
@@ -1080,7 +1260,14 @@ void SetupExoticLuaHooks()
     if (mirage.hwbp_hooking == HookingType::HWBP_HOOK)
     {
         HWBP::InstallHWBP((DWORD)call_luaZ_fill, (DWORD)&hkLuaZFill);
-        HWBP::InstallHWBP((DWORD)call_luaX_setinput, (DWORD)&hkLuaXSetInput);
+        if (call_luaX_setinput)
+        {
+            HWBP::InstallHWBP((DWORD)call_luaX_setinput, (DWORD)&hkLuaXSetInput);
+        }
+        else if (call_f_parser)
+        {
+            HWBP::InstallHWBP((DWORD)call_f_parser, (DWORD)&hkLuaFParser);
+        }
         if (call_luaD_protectedparser)
         {
             HWBP::InstallHWBP((DWORD)call_luaD_protectedparser, (DWORD)&hkLuaDProtectedParser);
@@ -1095,11 +1282,23 @@ void SetupExoticLuaHooks()
         exotic_hooks_failed = true;
         return;
     }
-    if (MH_CreateHook(call_luaX_setinput, &hkLuaXSetInput, reinterpret_cast<LPVOID*>(&call_luaX_setinput)) != MH_OK)
+    if (call_luaX_setinput)
     {
-        LogInFile(LOG_NAME, xorstr_("[ERROR] EXOTIC: failed to hook EXOTIC_2.\n"));
-        exotic_hooks_failed = true;
-        return;
+        if (MH_CreateHook(call_luaX_setinput, &hkLuaXSetInput, reinterpret_cast<LPVOID*>(&call_luaX_setinput)) != MH_OK)
+        {
+            LogInFile(LOG_NAME, xorstr_("[ERROR] EXOTIC: failed to hook EXOTIC_2.\n"));
+            exotic_hooks_failed = true;
+            return;
+        }
+    }
+    else if (call_f_parser)
+    {
+        if (MH_CreateHook(call_f_parser, &hkLuaFParser, reinterpret_cast<LPVOID*>(&call_f_parser)) != MH_OK)
+        {
+            LogInFile(LOG_NAME, xorstr_("[ERROR] EXOTIC: failed to hook EXOTIC_f_parser.\n"));
+            exotic_hooks_failed = true;
+            return;
+        }
     }
 
     if (call_luaD_protectedparser)

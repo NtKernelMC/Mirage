@@ -182,5 +182,8 @@
     <ClInclude Include="AnsiRegistry.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
+    <ClInclude Include="ShadowTrace.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

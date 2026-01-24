@@ -9,7 +9,6 @@
 #include <fstream>
 #include <cmath>
 #include <string>
-using namespace std;
 #define FLOAT_EPSILON 0.0001f
 #pragma warning (disable : 4244)
 class CVector4D
