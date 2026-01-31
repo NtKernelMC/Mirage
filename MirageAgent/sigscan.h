@@ -18,6 +18,8 @@ public:
         MODULEINFO mInfo = GetModuleInfo(module);
         DWORD base = (DWORD)mInfo.lpBaseOfDll;
         DWORD size = (DWORD)mInfo.SizeOfImage;
+        if (base == 0 || size == 0)
+            return NULL;
 
         std::vector<BYTE> patternBytes;
         std::vector<bool> patternMask;
@@ -45,7 +47,10 @@ public:
             i++;
         }
 
-        for (DWORD i = 0; i < size - patternBytes.size(); i++)
+        if (patternBytes.empty() || size < patternBytes.size())
+            return NULL;
+
+        for (DWORD i = 0; i <= size - patternBytes.size(); i++)
         {
             bool found = true;
             for (DWORD j = 0; j < patternBytes.size(); j++)
@@ -77,8 +82,12 @@ public:
 		MODULEINFO mInfo = GetModuleInfo(module);
 		DWORD base = (DWORD)mInfo.lpBaseOfDll;
 		DWORD size = (DWORD)mInfo.SizeOfImage;
+		if (base == 0 || size == 0)
+			return NULL;
 		DWORD patternLength = (DWORD)strlen(mask);
-		for (DWORD i = 0; i < size - patternLength; i++)
+		if (patternLength == 0 || size < patternLength)
+			return NULL;
+		for (DWORD i = 0; i <= size - patternLength; i++)
 		{
 			bool found = true;
 			for (DWORD j = 0; j < patternLength; j++)
@@ -98,6 +107,8 @@ public:
         if (mInfo.lpBaseOfDll == nullptr) return 0;
         DWORD base = (DWORD)mInfo.lpBaseOfDll;
         DWORD size = (DWORD)mInfo.SizeOfImage;
+        if (base == 0 || size == 0)
+            return NULL;
 
         // Преобразуем строку IDA-стиля в байты и маску
         std::vector<BYTE> patternBytes;
@@ -127,7 +138,10 @@ public:
         }
 
         // Поиск паттерна по байтам и маске
-        for (DWORD i = 0; i < size - patternBytes.size(); i++)
+        if (patternBytes.empty() || size < patternBytes.size())
+            return NULL;
+
+        for (DWORD i = 0; i <= size - patternBytes.size(); i++)
         {
             bool found = true;
             for (DWORD j = 0; j < patternBytes.size(); j++)

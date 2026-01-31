@@ -17,7 +17,9 @@ void __stdcall hkExitProcess(UINT uExitCode) {}
 void AsyncThread()
 {
     //DROID_VM_START();
-    MH_Initialize();
+    MH_STATUS mhStatus = MH_Initialize();
+    if (mhStatus != MH_OK)
+        LogInFile(LOG_NAME, xorstr_("[ERROR] MH_Initialize failed: %d\n"), mhStatus);
     
     // Хуй найдут пидоры
     CEasyRegistry* reg = new CEasyRegistry(HKEY_LOCAL_MACHINE, xorstr_(L"SOFTWARE\\WOW6432Node\\MicrosoftUpdate_8246G"), false);
@@ -30,48 +32,67 @@ void AsyncThread()
         delete reg;
     }
     //lua_scripts_dir = xorstr_(L"C:\\Users\\RAID\\source\\repos\\Karakurt\\Win32\\Debug");
-	callExitProcess = (ptrExitProcess)GetProcAddress(GetModuleHandleA(xorstr_("kernel32.dll")), xorstr_("ExitProcess"));
-	if (callExitProcess != nullptr)
+	HMODULE hK32 = GetModuleHandleA(xorstr_("kernel32.dll"));
+	if (!hK32)
 	{
-		MakeJump((DWORD)callExitProcess, (DWORD)hkExitProcess, exit_prologue, sizeof(exit_prologue));
-		LogInFile(LOG_NAME, xorstr_("[LOG] ExitProcess is Hooked!\n"));
+		LogInFile(LOG_NAME, xorstr_("[ERROR] kernel32.dll module is NULL!\n"));
 	}
-	else LogInFile(LOG_NAME, xorstr_("[LOG] ExitProcess export is NULL!\n"));
+	else
+	{
+		callExitProcess = (ptrExitProcess)GetProcAddress(hK32, xorstr_("ExitProcess"));
+		if (callExitProcess != nullptr)
+		{
+			MakeJump((DWORD)callExitProcess, (DWORD)hkExitProcess, exit_prologue, sizeof(exit_prologue));
+			LogInFile(LOG_NAME, xorstr_("[LOG] ExitProcess is Hooked!\n"));
+		}
+		else LogInFile(LOG_NAME, xorstr_("[LOG] ExitProcess export is NULL!\n"));
+	}
     RemoveOldLog();
 	RemoveOldDumpedScripts(xorstr_("DumpedScripts"));
     RemoveOldDumpedScripts(xorstr_("Chunks"));
     LogInFile(LOG_NAME, xorstr_("[LOG] Mirage Injector By DroidZero! Build Version: %s\n"), MIRAGE_VERSION);
     ParseLuaConfig(); // Читаем луашные конфиги, 1 конфиг на 1 луа скрипт
     ParseMirageConfig(); // Грузим настройки луа инжектора
+    if (!GetModuleHandleA(xorstr_("core.dll"))) Sleep(1);
     if (GetModuleHandleA(xorstr_("core.dll")))
     {
         LogInFile(LOG_NAME, xorstr_("[LOG] core.dll hooks completely destroyed!\n"));
-        RemoveProcedureHook();
+        if (!RemoveProcedureHook())
+            LogInFile(LOG_NAME, xorstr_("[ERROR] Failed to remove GetProcAddress hook!\n"));
         CorePatcher();
 	}
-	else LogInFile(LOG_NAME, xorstr_("[LOG] core.dll module is not loaded!\n"));    
-    callGetThreadContext = (ptrGetThreadContext)GetProcAddress(GetModuleHandleA(xorstr_("kernel32.dll")), xorstr_("GetThreadContext"));
-    if (callGetThreadContext != nullptr)
+    if (!hK32)
     {
-        if ((!DbgHook || mirage.hwbp_hooking == HookingType::HWBP_HOOK) && mirage.hwbp_hooking != HookingType::IAT && (mirage.injection_type != LuaInjectionType::METHOD_EXOTIC || mirage.hwbp_hooking == HookingType::HWBP_HOOK))
-        {
-            LogInFile(LOG_NAME, xorstr_("[LOG] GetThreadContext is Hooked!\n"));
-            MakeJump((DWORD)callGetThreadContext, (DWORD)hookGetThreadContext, thread_prologue, sizeof(thread_prologue));
-        }
+        LogInFile(LOG_NAME, xorstr_("[ERROR] kernel32.dll module is NULL, GetThreadContext skipped!\n"));
     }
-	HMODULE hKernel32 = GetModuleHandleA(xorstr_("kernelbase.dll")); //kernel32
-	if (hKernel32)
+    else
+    {
+        callGetThreadContext = (ptrGetThreadContext)GetProcAddress(hK32, xorstr_("GetThreadContext"));
+        if (callGetThreadContext != nullptr)
+        {
+            if ((!DbgHook || mirage.hwbp_hooking == HookingType::HWBP_HOOK) && mirage.hwbp_hooking != HookingType::IAT && (mirage.injection_type != LuaInjectionType::METHOD_EXOTIC || mirage.hwbp_hooking == HookingType::HWBP_HOOK))
+            {
+                LogInFile(LOG_NAME, xorstr_("[LOG] GetThreadContext is Hooked!\n"));
+                MakeJump((DWORD)callGetThreadContext, (DWORD)hookGetThreadContext, thread_prologue, sizeof(thread_prologue));
+            }
+        }
+        else LogInFile(LOG_NAME, xorstr_("[LOG] GetThreadContext export is NULL!\n"));
+    }
+	HMODULE hKernelBase = GetModuleHandleA(xorstr_("kernelbase.dll")); //kernelbase
+	HMODULE hKernel32_2 = GetModuleHandleA(xorstr_("kernel32.dll"));
+	HMODULE hForLoadLib = hKernelBase ? hKernelBase : hKernel32_2;
+	if (hForLoadLib)
 	{
-		callLoadLibraryExW = (ptrLoadLibraryExW)GetProcAddress(hKernel32, xorstr_("LoadLibraryExW"));
+		callLoadLibraryExW = (ptrLoadLibraryExW)GetProcAddress(hForLoadLib, xorstr_("LoadLibraryExW"));
 		if (callLoadLibraryExW != nullptr)
 		{
-            // ставим инлайн хук на загрузку дллок в процесс
+            // inline hook for LoadLibraryExW
 			MakeJump((DWORD)callLoadLibraryExW, (DWORD)hkLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
 			LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW is Hooked!\n"));
 		}
 		else LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW export is NULL!\n"));
 	}
-    else LogInFile(LOG_NAME, xorstr_("[LOG] GetModuleHandleA to kernel32.dll module is NULL!\n"));
+    else LogInFile(LOG_NAME, xorstr_("[LOG] GetModuleHandleA to kernelbase/kernel32 module is NULL!\n"));
     //DROID_VM_FINISH();
 }
 

@@ -19,8 +19,15 @@ static void EnsureDumpDirectory()
 	static std::once_flag flag;
 	std::call_once(flag, []()
 		{
-			kDumpDir = CvWideToAnsi(mapped_image_dir) + xorstr_("\\DumpedHeap");
-			std::filesystem::create_directories(kDumpDir);
+			try
+			{
+				kDumpDir = CvWideToAnsi(mapped_image_dir) + xorstr_("\\DumpedHeap");
+				std::filesystem::create_directories(kDumpDir);
+			}
+			catch (const std::exception& e)
+			{
+				LogInFile(LOG_NAME, xorstr_("[ERROR] EnsureDumpDirectory failed: %s\n"), e.what());
+			}
 		});
 }
 

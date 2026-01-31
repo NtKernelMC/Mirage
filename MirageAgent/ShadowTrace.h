@@ -38,6 +38,7 @@ namespace ShadowTrace
 	};
 
 	static std::map<std::string, std::vector<WmiFieldInfo>> g_wmiFieldMap;
+	static std::unordered_map<std::string, std::vector<WmiFieldInfo>> g_wmiFieldMapNormalized;
 	static std::unordered_map<std::string, WmiFieldInfo> g_wmiUniqueNormalized;
 	static std::unordered_map<std::string, std::string> g_wmiFakeCache;
 	static std::unordered_map<std::string, std::string> g_wmiNonUniqueCache;
@@ -249,6 +250,109 @@ namespace ShadowTrace
 		return std::string(buf, static_cast<size_t>(pos));
 	}
 
+	static bool IsInListIC(const std::vector<std::string>& list, const std::string& value)
+	{
+		for (const auto& item : list)
+		{
+			if (EqualsIC(item, value)) return true;
+		}
+		return false;
+	}
+
+	static bool LooksLikeGuid(const std::string& s)
+	{
+		if (s.size() != 36) return false;
+		const int hyphens[] = { 8, 13, 18, 23 };
+		for (int i = 0; i < 4; ++i)
+		{
+			if (s[hyphens[i]] != '-') return false;
+		}
+		for (size_t i = 0; i < s.size(); ++i)
+		{
+			if (i == 8 || i == 13 || i == 18 || i == 23) continue;
+			if (!std::isxdigit(static_cast<unsigned char>(s[i]))) return false;
+		}
+		return true;
+	}
+
+	static bool LooksLikeHardwareId(const std::string& s)
+	{
+		if (s.find('\\') == std::string::npos) return false;
+		if (s.find('&') != std::string::npos) return true;
+		if (findStringIC(s, xorstr_("PCI\\"))) return true;
+		if (findStringIC(s, xorstr_("SCSI\\"))) return true;
+		if (findStringIC(s, xorstr_("USB\\"))) return true;
+		if (findStringIC(s, xorstr_("HDAUDIO\\"))) return true;
+		return false;
+	}
+
+	static bool IsHexLikeToken(const std::string& s)
+	{
+		bool hasHex = false;
+		for (unsigned char c : s)
+		{
+			if (std::isalnum(c))
+			{
+				hasHex = true;
+				if (!std::isxdigit(c)) return false;
+			}
+		}
+		return hasHex;
+	}
+
+	static bool LooksLikeAlphaNumId(const std::string& s)
+	{
+		if (s.size() < 6 || s.size() > 40) return false;
+		bool hasAlpha = false;
+		bool hasDigit = false;
+		for (unsigned char c : s)
+		{
+			if (std::isalnum(c))
+			{
+				if (std::isalpha(c)) hasAlpha = true;
+				if (std::isdigit(c)) hasDigit = true;
+			}
+			else if (c == '-' || c == '_' || c == '.' || c == '#')
+			{
+				continue;
+			}
+			else if (std::isspace(c))
+			{
+				return false;
+			}
+			else
+			{
+				return false;
+			}
+		}
+		return hasAlpha && hasDigit;
+	}
+
+	static bool LooksLikeUnderscoreId(const std::string& s)
+	{
+		bool hasUnderscore = false;
+		bool hasAlpha = false;
+		bool hasDigit = false;
+		for (unsigned char c : s)
+		{
+			if (c == '_') { hasUnderscore = true; continue; }
+			if (std::isalnum(c))
+			{
+				if (std::isalpha(c)) hasAlpha = true;
+				if (std::isdigit(c)) hasDigit = true;
+			}
+			else if (c == '-' || std::isspace(c))
+			{
+				continue;
+			}
+			else
+			{
+				return false;
+			}
+		}
+		return hasUnderscore && hasAlpha && hasDigit;
+	}
+
 	static const std::vector<std::string> kMotherboardVendors =
 	{
 		"Hewlett-Packard Corporation",
@@ -316,6 +420,7 @@ namespace ShadowTrace
 	static const std::vector<std::string> kSystemModels =
 	{
 		"ASUS TUF Dash F15 FX516PM_HN024T",
+		"ASUS TUF Dash F15",
 		"DELL G5 15 5590",
 		"HP Pavilion 15",
 		"Lenovo Legion 5",
@@ -382,7 +487,9 @@ namespace ShadowTrace
 		"USB Keyboard Device",
 		"Standard 101/102-Key or Microsoft Natural PS/2 Keyboard",
 		"PC/AT Enhanced Keyboard (101/102-Key)",
-		"Standard PS/2 Keyboard (106/109 Key)"
+		"Standard PS/2 Keyboard (106/109 Key)",
+		"\xD0\xA0\xD0\xB0\xD1\x81\xD1\x88\xD0\xB8\xD1\x80\xD0\xB5\xD0\xBD\xD0\xBD\xD0\xB0\xD1\x8F\x20\xD0\xBA\xD0\xBB\xD0\xB0\xD0\xB2\xD0\xB8\xD0\xB0\xD1\x82\xD1\x83\xD1\x80\xD0\xB0\x20\x28\x31\x30\x31\x20\xD0\xB8\xD0\xBB\xD0\xB8\x20\x31\x30\x32\x20\xD0\xBA\xD0\xBB\xD0\xB0\xD0\xB2\xD0\xB8\xD1\x88\xD0\xB8\x29",
+		"\xD0\xA0\xD0\xB0\xD1\x81\xD1\x88\xD0\xB8\xD1\x80\xD0\xB5\xD0\xBD\xD0\xBD\xD0\xB0\xD1\x8F\x20\xD0\xBA\xD0\xBB\xD0\xB0\xD0\xB2\xD0\xB8\xD0\xB0\xD1\x82\xD1\x83\xD1\x80\xD0\xB0\x20\x50\x53\x2F\x32\x20\x50\x43\x2F\x41\x54\x20\x28\x31\x30\x31\x2F\x31\x30\x32\x20\xD0\xBA\xD0\xBB\xD0\xB0\xD0\xB2\xD0\xB8\xD1\x88\xD0\xB8\x29"
 	};
 
 	static const std::vector<std::string> kKeyboardLayouts =
@@ -1042,14 +1149,127 @@ namespace ShadowTrace
 		return false;
 	}
 
+	static bool TryGenerateHeuristic(const std::string& original, WmiFieldInfo& outInfo, std::string& outFake)
+	{
+		const std::string trimmed = TrimWmiValue(original);
+		if (trimmed.empty() || IsPlaceholderWmiValue(trimmed)) return false;
+
+		if (LooksLikeWmiDateTime(trimmed))
+		{
+			outFake = GenerateWmiDateTimeLike(trimmed);
+			outInfo = { "Heuristic", "DateTime", false };
+			return true;
+		}
+		if (LooksLikeDateMDY(trimmed))
+		{
+			outFake = GenerateDateMDYLike();
+			outInfo = { "Heuristic", "Date", false };
+			return true;
+		}
+		if (LooksLikeGuid(trimmed))
+		{
+			outFake = GenerateGuidLike();
+			outInfo = { "Heuristic", "Guid", false };
+			return true;
+		}
+		if (LooksLikeHardwareId(trimmed))
+		{
+			outFake = GenerateLike(trimmed, false);
+			outInfo = { "Heuristic", "HardwareId", false };
+			return true;
+		}
+
+		if (IsInListIC(kMotherboardVendors, trimmed)) { outFake = PickRandomValue(kMotherboardVendors, trimmed); return true; }
+		if (IsInListIC(kBiosVendors, trimmed)) { outFake = PickRandomValue(kBiosVendors, trimmed); return true; }
+		if (IsInListIC(kSystemModels, trimmed)) { outFake = PickRandomValue(kSystemModels, trimmed); return true; }
+		if (IsInListIC(kBoardProducts, trimmed)) { outFake = PickRandomValue(kBoardProducts, trimmed); return true; }
+		if (IsInListIC(kBoardVersions, trimmed)) { outFake = PickRandomValue(kBoardVersions, trimmed); return true; }
+		if (IsInListIC(kKeyboardNames, trimmed)) { outFake = PickRandomValue(kKeyboardNames, trimmed); return true; }
+		if (IsInListIC(kKeyboardLayouts, trimmed)) { outFake = PickRandomValue(kKeyboardLayouts, trimmed); return true; }
+		if (IsInListIC(kSoundDevices, trimmed)) { outFake = PickSoundDeviceFor(trimmed); return true; }
+		if (IsInListIC(kSoundVendors, trimmed)) { outFake = PickSoundVendorFor(trimmed); return true; }
+		if (IsInListIC(kGpuNames, trimmed)) { outFake = PickGpuNameFor(trimmed); return true; }
+		if (IsInListIC(kVideoDescriptions, trimmed)) { outFake = PickRandomValue(kVideoDescriptions, trimmed); return true; }
+		if (IsInListIC(kAdapterDacTypes, trimmed)) { outFake = PickRandomValue(kAdapterDacTypes, trimmed); return true; }
+		if (IsInListIC(kAdapterCompatibility, trimmed)) { outFake = PickGpuVendorFor(trimmed); return true; }
+		if (IsInListIC(kDiskModels, trimmed)) { outFake = PickRandomValue(kDiskModels, trimmed); return true; }
+		if (IsInListIC(kMemoryVendors, trimmed)) { outFake = PickRandomValue(kMemoryVendors, trimmed); return true; }
+		if (IsInListIC(kMemoryPartNumbers, trimmed)) { outFake = PickRandomValue(kMemoryPartNumbers, trimmed); return true; }
+
+		if (LooksLikeUnderscoreId(trimmed))
+		{
+			outFake = GenerateLike(trimmed, IsHexLikeToken(trimmed));
+			outInfo = { "Heuristic", "UnderscoreId", false };
+			return true;
+		}
+		if (LooksLikeAlphaNumId(trimmed))
+		{
+			outFake = GenerateLike(trimmed, IsHexLikeToken(trimmed));
+			outInfo = { "Heuristic", "Identifier", false };
+			return true;
+		}
+		return false;
+	}
+
 	static bool TryGenerateNonUnique(const std::string& original, WmiFieldInfo& outInfo, std::string& outFake)
 	{
 		std::vector<WmiFieldInfo> infos;
 		{
 			std::lock_guard<std::mutex> lock(g_wmiMutex);
 			auto it = g_wmiFieldMap.find(original);
-			if (it == g_wmiFieldMap.end()) return false;
-			infos = it->second;
+			if (it != g_wmiFieldMap.end())
+			{
+				infos = it->second;
+			}
+			else
+			{
+				const std::string trimmed = TrimWmiValue(original);
+				if (!trimmed.empty())
+				{
+					auto itTrim = g_wmiFieldMap.find(trimmed);
+					if (itTrim != g_wmiFieldMap.end())
+					{
+						infos = itTrim->second;
+					}
+					else
+					{
+						const std::string normalized = NormalizeWmiValue(trimmed);
+						auto itNorm = g_wmiFieldMapNormalized.find(normalized);
+						if (itNorm != g_wmiFieldMapNormalized.end())
+							infos = itNorm->second;
+					}
+				}
+			}
+		}
+
+		if (infos.empty())
+		{
+			const std::string cacheKey = std::string("Heuristic|") + original;
+			{
+				std::lock_guard<std::mutex> lock(g_wmiMutex);
+				auto it = g_wmiNonUniqueCache.find(cacheKey);
+				if (it != g_wmiNonUniqueCache.end())
+				{
+					outInfo = { "Heuristic", "Cached", false };
+					outFake = it->second;
+					return true;
+				}
+			}
+
+			std::string fake;
+			WmiFieldInfo info;
+			if (TryGenerateHeuristic(original, info, fake))
+			{
+				fake = PreserveTrailingSpaces(original, fake);
+				{
+					std::lock_guard<std::mutex> lock(g_wmiMutex);
+					g_wmiNonUniqueCache.emplace(cacheKey, fake);
+				}
+				outInfo = info;
+				outFake = fake;
+				return true;
+			}
+			return false;
 		}
 
 		for (const auto& info : infos)
@@ -1079,6 +1299,25 @@ namespace ShadowTrace
 				return true;
 			}
 		}
+		{
+			const std::string cacheKey = std::string("Heuristic|") + original;
+			std::lock_guard<std::mutex> lock(g_wmiMutex);
+			auto it = g_wmiNonUniqueCache.find(cacheKey);
+			if (it != g_wmiNonUniqueCache.end())
+			{
+				outInfo = { "Heuristic", "Cached", false };
+				outFake = it->second;
+				return true;
+			}
+		}
+		if (TryGenerateHeuristic(original, outInfo, outFake))
+		{
+			outFake = PreserveTrailingSpaces(original, outFake);
+			const std::string cacheKey = std::string("Heuristic|") + original;
+			std::lock_guard<std::mutex> lock(g_wmiMutex);
+			g_wmiNonUniqueCache.emplace(cacheKey, outFake);
+			return true;
+		}
 		return false;
 	}
 
@@ -1086,11 +1325,16 @@ namespace ShadowTrace
 	{
 		if (value.empty()) return;
 		WmiFieldInfo info{ className, propertyName, unique };
+		const std::string trimmed = TrimWmiValue(value);
+		const std::string normalized = NormalizeWmiValue(value);
 		std::lock_guard<std::mutex> lock(g_wmiMutex);
 		g_wmiFieldMap[value].push_back(info);
+		if (!trimmed.empty() && trimmed != value)
+			g_wmiFieldMap[trimmed].push_back(info);
+		if (!normalized.empty())
+			g_wmiFieldMapNormalized[normalized].push_back(info);
 		if (unique && !IsPlaceholderWmiValue(value))
 		{
-			std::string normalized = NormalizeWmiValue(value);
 			if (!normalized.empty() && g_wmiUniqueNormalized.find(normalized) == g_wmiUniqueNormalized.end())
 			{
 				g_wmiUniqueNormalized.emplace(normalized, info);
@@ -1495,4 +1739,46 @@ namespace ShadowTrace
 		g_macFakeCache.emplace(orig, fake);
 		return fake;
 	}
+
+	struct NetcEncodedString
+	{
+		char* begin;
+		char* end;
+		char* capacity;
+	};
+
+	static __forceinline BYTE NetcEncodeDecodeByte(BYTE b, unsigned int i)
+	{
+		// Mirrors sub_1001D220: dst[i] = i ^ src[i] ^ ((196 * (4 - (i & 3))) / 5) ^ 0x31 ^ (1 << (i & 7))
+		return (BYTE)(b ^ i ^ ((196 * (4 - (i & 3))) / 5) ^ 0x31 ^ (1u << (i & 7)));
+	}
+
+	static bool NetcDecodeString(const NetcEncodedString* s, std::string& out)
+	{
+		if (!s || !s->begin || !s->end || s->end < s->begin) return false;
+		const size_t len = (size_t)(s->end - s->begin);
+		if (len == 0 || len > 64) return false;
+		out.resize(len);
+		for (size_t i = 0; i < len; ++i)
+			out[i] = (char)NetcEncodeDecodeByte((BYTE)s->begin[i], (unsigned int)i);
+		return true;
+	}
+
+	static bool NetcEncodeStringInPlace(NetcEncodedString* s, const std::string& plain)
+	{
+		if (!s || !s->begin || !s->end || s->end < s->begin) return false;
+		const size_t len = (size_t)(s->end - s->begin);
+		if (plain.size() != len) return false;
+		for (size_t i = 0; i < len; ++i)
+			s->begin[i] = (char)NetcEncodeDecodeByte((BYTE)plain[i], (unsigned int)i);
+		s->end = s->begin + len;
+		return true;
+	}
+	struct NetcSString {
+		char     sso[16];
+		uint32_t len;
+		uint32_t cap;
+	};
+
+	NetcSString s{};
 }

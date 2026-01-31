@@ -40,6 +40,8 @@
 #include <intrin.h>
 #include "MinHook.h"
 #include "CVector.h"
+#include <wincred.h>
+#include <strsafe.h>
 #include "CVector2D.h"
 #include <random>
 #include "Nirmata.h"
@@ -69,6 +71,54 @@ bool DbgHook = true; // по умолчанию разрешаем работу 
 void* CNetAPI = nullptr;
 bool HideCall = false;
 std::atomic_bool allow_get_ped_voice_once = false;
+std::atomic_bool block_screen_packet = false;
+std::atomic_bool disable_explosion_projectile_events = false;
+std::unordered_set<std::string> command_ignore_set;
+std::mutex command_ignore_mutex;
+std::unordered_map<int, FILE*> lua_file_handles;
+std::mutex lua_file_mutex;
+std::atomic_int lua_file_next_id = 1;
+static inline bool IsCommandSpace(char c)
+{
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+static inline std::string NormalizeCommandName(const std::string& input)
+{
+	size_t i = 0;
+	while (i < input.size() && IsCommandSpace(input[i])) ++i;
+	if (i < input.size() && input[i] == '/') ++i;
+	size_t start = i;
+	while (i < input.size() && !IsCommandSpace(input[i])) ++i;
+	if (start >= i) return {};
+	std::string out = input.substr(start, i - start);
+	for (char& c : out) c = to_lower_ascii(c);
+	return out;
+}
+static inline int RegisterLuaFileHandle(FILE* file)
+{
+	if (!file) return 0;
+	std::lock_guard<std::mutex> lock(lua_file_mutex);
+	int id = lua_file_next_id++;
+	if (id <= 0) id = lua_file_next_id++;
+	lua_file_handles[id] = file;
+	return id;
+}
+static inline FILE* GetLuaFileHandle(int id)
+{
+	std::lock_guard<std::mutex> lock(lua_file_mutex);
+	auto it = lua_file_handles.find(id);
+	if (it == lua_file_handles.end()) return nullptr;
+	return it->second;
+}
+static inline bool CloseLuaFileHandle(int id)
+{
+	std::lock_guard<std::mutex> lock(lua_file_mutex);
+	auto it = lua_file_handles.find(id);
+	if (it == lua_file_handles.end()) return false;
+	if (it->second) fclose(it->second);
+	lua_file_handles.erase(it);
+	return true;
+}
 BYTE exit_prologue[5] = { 0x0 };
 typedef BOOL(__stdcall* ptrGetThreadContext)(HANDLE hThread, LPCONTEXT lpContext);
 ptrGetThreadContext callGetThreadContext = nullptr;
@@ -267,6 +317,8 @@ typedef struct
 	std::string dump_resource_name;
 	bool DumpAllScripts;
 	DllInjectionType dll_injection_type;
+	bool set_public;
+	std::string public_serial;
 
 } MIRAGE_CONFIG, *PMIRAGE_CONFIG;
 MIRAGE_CONFIG mirage;
@@ -440,6 +492,11 @@ bool RemoveProcedureHook()
 }
 HMODULE __stdcall hkLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
+	if (!callLoadLibraryExW)
+	{
+		LogInFile(LOG_NAME, xorstr_("[ERROR] callLoadLibraryExW is NULL in hkLoadLibraryExW!\n"));
+		return nullptr;
+	}
 	RestorePrologue((DWORD)callLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue)); // восстанавливаем пролог функции
 	HMODULE hModule = callLoadLibraryExW(lpLibFileName, hFile, dwFlags);
 	if (lpLibFileName != nullptr && wcslen(lpLibFileName) >= 1)
@@ -456,4 +513,265 @@ HMODULE __stdcall hkLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dw
 	}
 	MakeJump((DWORD)callLoadLibraryExW, (DWORD)hkLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
 	return hModule;
+}
+BOOL aRegDelnodeRecurse(HKEY hKeyRoot, LPSTR lpSubKey)
+{
+	LPTSTR lpEnd; LONG lResult; DWORD dwSize;
+	CHAR szName[MAX_PATH]; HKEY hKey; FILETIME ftWrite;
+	lResult = RegDeleteKeyA(hKeyRoot, lpSubKey);
+	if (lResult == ERROR_SUCCESS) return TRUE;
+	lResult = RegOpenKeyExA(hKeyRoot, lpSubKey, 0, KEY_READ, &hKey);
+	if (lResult != ERROR_SUCCESS)
+	{
+		if (lResult == ERROR_FILE_NOT_FOUND) return TRUE;
+		else return FALSE;
+	}
+	lpEnd = lpSubKey + lstrlenA(lpSubKey);
+	if (*(lpEnd - 1) != TEXT('\\'))
+	{
+		*lpEnd = TEXT('\\');
+		lpEnd++;
+		*lpEnd = TEXT('\0');
+	}
+	dwSize = MAX_PATH;
+	lResult = RegEnumKeyExA(hKey, 0, szName, &dwSize, NULL, NULL, NULL, &ftWrite);
+	if (lResult == ERROR_SUCCESS)
+	{
+		do
+		{
+			*lpEnd = TEXT('\0');
+			StringCchCatA(lpSubKey, MAX_PATH * 2, szName);
+			if (!aRegDelnodeRecurse(hKeyRoot, lpSubKey)) break;
+			dwSize = MAX_PATH;
+			lResult = RegEnumKeyExA(hKey, 0, szName, &dwSize, NULL, NULL, NULL, &ftWrite);
+		} while (lResult == ERROR_SUCCESS);
+	}
+	lpEnd--;
+	*lpEnd = TEXT('\0');
+	RegCloseKey(hKey);
+	lResult = RegDeleteKeyA(hKeyRoot, lpSubKey);
+	if (lResult == ERROR_SUCCESS) return TRUE;
+	return FALSE;
+}
+BOOL aRegDelnode(HKEY hKeyRoot, LPCSTR lpSubKey)
+{
+	CHAR szDelKey[MAX_PATH * 2];
+	StringCchCopyA(szDelKey, MAX_PATH * 2, lpSubKey);
+	return aRegDelnodeRecurse(hKeyRoot, szDelKey);
+}
+BOOL DeleteCredential(const std::wstring& targetName)
+{
+	BOOL result = CredDeleteW(targetName.c_str(), CRED_TYPE_GENERIC, 0);
+	if (result) return TRUE;
+	return FALSE;
+}
+static std::string ReadGenericCredBlob(const std::wstring& targetName)
+{
+	if (targetName.empty())
+		return {};
+
+	PCREDENTIALW cred = nullptr;
+	if (!CredReadW(targetName.c_str(), CRED_TYPE_GENERIC, 0, &cred) || cred == nullptr)
+		return {};
+
+	std::string out;
+	if (cred->CredentialBlob && cred->CredentialBlobSize)
+		out.assign(reinterpret_cast<const char*>(cred->CredentialBlob), cred->CredentialBlobSize);
+
+	CredFree(cred);
+	return out;
+}
+static std::string ReadRegBinary(HKEY root, const std::wstring& subkey, const std::wstring& valueName)
+{
+	if (subkey.empty() || valueName.empty())
+		return {};
+
+	HKEY hKey = nullptr;
+	if (RegOpenKeyExW(root, subkey.c_str(), 0, KEY_QUERY_VALUE, &hKey) != ERROR_SUCCESS)
+		return {};
+
+	DWORD type = 0;
+	DWORD size = 0;
+	if (RegQueryValueExW(hKey, valueName.c_str(), nullptr, &type, nullptr, &size) != ERROR_SUCCESS)
+	{
+		RegCloseKey(hKey);
+		return {};
+	}
+	if (type != REG_BINARY || size == 0)
+	{
+		RegCloseKey(hKey);
+		return {};
+	}
+	std::string out;
+	out.resize(size);
+	if (RegQueryValueExW(hKey, valueName.c_str(), nullptr, &type,
+		reinterpret_cast<BYTE*>(&out[0]), &size) != ERROR_SUCCESS)
+	{
+		RegCloseKey(hKey);
+		return {};
+	}
+	RegCloseKey(hKey);
+	out.resize(size);
+	return out;
+}
+static bool WriteRegBinary(HKEY root, const std::wstring& subkey, const std::wstring& valueName, const std::string& data)
+{
+	if (subkey.empty() || valueName.empty())
+		return false;
+
+	HKEY hKey = nullptr;
+	if (RegCreateKeyExW(root, subkey.c_str(), 0, nullptr, 0, KEY_SET_VALUE, nullptr, &hKey, nullptr) != ERROR_SUCCESS)
+		return false;
+
+	const BYTE* bytes = reinterpret_cast<const BYTE*>(data.data());
+	const DWORD size = static_cast<DWORD>(data.size());
+	LONG status = RegSetValueExW(hKey, valueName.c_str(), 0, REG_BINARY, bytes, size);
+	RegCloseKey(hKey);
+	return status == ERROR_SUCCESS;
+}
+bool IsFileExists(std::string file_path)
+{
+	FILE* hFile = fopen(file_path.c_str(), "rb");
+	if (hFile != nullptr)
+	{
+		fclose(hFile);
+		return true;
+	}
+	return false;
+}
+static std::string ReadRegString(HKEY root, const wchar_t* subkey, const wchar_t* value) {
+	DWORD type = 0;
+	DWORD size = 0;
+	if (RegGetValueW(root, subkey, value, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &type, nullptr, &size) != ERROR_SUCCESS) {
+		return {};
+	}
+	std::vector<wchar_t> buf(size / sizeof(wchar_t) + 1, L'\0');
+	if (RegGetValueW(root, subkey, value, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &type, buf.data(), &size) != ERROR_SUCCESS) {
+		return {};
+	}
+	// Convert to ANSI like the binary effectively does.
+	int needed = WideCharToMultiByte(CP_ACP, 0, buf.data(), -1, nullptr, 0, nullptr, nullptr);
+	if (needed <= 1) {
+		return {};
+	}
+	std::string out(needed - 1, '\0');
+	WideCharToMultiByte(CP_ACP, 0, buf.data(), -1, out.data(), needed, nullptr, nullptr);
+	return out;
+}
+#pragma comment(lib, "Crypt32.lib")
+static std::string BuildHwKeyString() {
+	std::string machineGuid = ReadRegString(HKEY_LOCAL_MACHINE,
+		L"SOFTWARE\\Microsoft\\Cryptography", L"MachineGuid");
+	if (machineGuid.empty())
+		machineGuid = "908a62fa-a205-4dd6-936c-d53e49bb3ca2";
+
+	std::string productId = ReadRegString(HKEY_LOCAL_MACHINE,
+		L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"ProductId");
+	if (productId.empty())
+		productId = "a745d-ecd77-b2471-cb0b7";
+
+	std::string baseBoard = ReadRegString(HKEY_LOCAL_MACHINE,
+		L"HARDWARE\\DESCRIPTION\\System\\BIOS", L"BaseBoardProduct");
+	if (baseBoard.empty())
+		baseBoard = "To be filled by O.E.M.";
+
+	return machineGuid + "-" + productId + "-" + baseBoard;
+}
+
+std::string EncryptDpapiXor(const std::string& plain) {
+	std::string key = BuildHwKeyString();
+	if (key.empty()) {
+		return {};
+	}
+
+	std::string xored = plain;
+	for (size_t i = 0; i < xored.size(); ++i) {
+		xored[i] ^= key[i % key.size()];
+	}
+
+	DATA_BLOB in{};
+	in.pbData = reinterpret_cast<BYTE*>(xored.data());
+	in.cbData = static_cast<DWORD>(xored.size());
+
+	DATA_BLOB out{};
+	if (!CryptProtectData(&in, nullptr, nullptr, nullptr, nullptr,
+		CRYPTPROTECT_UI_FORBIDDEN, &out)) {
+		return {};
+	}
+
+	std::string encrypted(reinterpret_cast<char*>(out.pbData), out.cbData);
+	LocalFree(out.pbData);
+	return encrypted; // raw binary DPAPI blob
+}
+static std::string DecryptDpapiXor(const std::string& blob) {
+	if (blob.empty())
+		return {};
+
+	DATA_BLOB in{};
+	in.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(blob.data()));
+	in.cbData = static_cast<DWORD>(blob.size());
+
+	DATA_BLOB out{};
+	if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr,
+		CRYPTPROTECT_UI_FORBIDDEN, &out)) {
+		return {};
+	}
+
+	std::string xored(reinterpret_cast<char*>(out.pbData), out.cbData);
+	LocalFree(out.pbData);
+
+	std::string key = BuildHwKeyString();
+	if (key.empty())
+		return {};
+
+	for (size_t i = 0; i < xored.size(); ++i) {
+		xored[i] ^= key[i % key.size()];
+	}
+	return xored;
+}
+static std::string HexEncode(const std::string& data)
+{
+	static const char* kHex = "0123456789ABCDEF";
+	std::string out;
+	out.reserve(data.size() * 2);
+	for (unsigned char c : data)
+	{
+		out.push_back(kHex[(c >> 4) & 0xF]);
+		out.push_back(kHex[c & 0xF]);
+	}
+	return out;
+}
+static std::string SanitizeAscii(const std::string& data)
+{
+	std::string out = data;
+	for (char& ch : out)
+	{
+		unsigned char c = static_cast<unsigned char>(ch);
+		if (c < 32 || c > 126)
+			ch = '.';
+	}
+	return out;
+}
+inline bool WriteGenericCred_NoUserA(
+	const std::wstring& targetName,
+	const std::string& passwordAscii,
+	DWORD persist = CRED_PERSIST_LOCAL_MACHINE
+)
+{
+	if (targetName.empty())
+		return false;
+
+	CREDENTIALW cred{};
+	cred.Type = CRED_TYPE_GENERIC;
+	cred.TargetName = const_cast<LPWSTR>(targetName.c_str());
+	cred.Persist = persist;
+
+	// юзер не нужен
+	cred.UserName = nullptr; // или const_cast<LPWSTR>(L"");
+
+	// кладём байты пароля как есть (ASCII/UTF-8/что угодно)
+	cred.CredentialBlobSize = static_cast<DWORD>(passwordAscii.size());
+	cred.CredentialBlob = (BYTE*)passwordAscii.data();
+
+	return CredWriteW(&cred, 0) == TRUE;
 }

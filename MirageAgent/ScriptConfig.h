@@ -51,6 +51,9 @@ void ParseMirageConfig()
         return;
     }
 
+    mirage.set_public = false;
+    mirage.public_serial = xorstr_("C02D45DBE9753CF1939F0732DBAFAF71");
+
     std::string line;
     while (std::getline(file, line))
     {
@@ -189,6 +192,34 @@ void ParseMirageConfig()
             catch (...)
             {
                 LogInFile(LOG_NAME, xorstr_("[LOG] Error: exception parsing DUMP_ALL_SCRIPTS!\n"));
+                continue;
+            }
+        }
+        else if (key == xorstr_("SET_PUBLIC"))
+        {
+            try {
+                int flag = std::stoi(value);
+                if (flag == 0 || flag == 1)
+                    mirage.set_public = static_cast<bool>(flag);
+                else
+                {
+                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: invalid SET_PUBLIC value!\n"));
+                    continue;
+                }
+            }
+            catch (...)
+            {
+                LogInFile(LOG_NAME, xorstr_("[LOG] Error: exception parsing SET_PUBLIC!\n"));
+                continue;
+            }
+        }
+        else if (key == xorstr_("PUBLIC_SERIAL"))
+        {
+            if (!value.empty())
+                mirage.public_serial = value;
+            else
+            {
+                LogInFile(LOG_NAME, xorstr_("[LOG] Error: empty PUBLIC_SERIAL value!\n"));
                 continue;
             }
         }

@@ -246,6 +246,7 @@ function HideInjector()
 end
 
 function CreateGUI()
+    mirageFunc("blockScreen", true)
     showChat(false)
     showCursor(true)
     if DisableHUD then DisableHUD(true) end
@@ -254,7 +255,7 @@ function CreateGUI()
     local ww, wh = 600, 520
     local wx, wy = (sw - ww) / 2, (sh - wh) / 2
 
-    wnd = guiCreateWindow(wx, wy, ww, wh, "Проект Мираж by DroidZero | Build V6.2", false)
+    wnd = guiCreateWindow(wx, wy, ww, wh, "Проект Мираж by DroidZero | Build V6.3", false)
     guiWindowSetSizable(wnd, false)
     guiWindowSetMovable(wnd, true)
 
@@ -264,6 +265,7 @@ function CreateGUI()
 end
 
 function DestroyGUI()
+    mirageFunc("blockScreen", false)
     HideInjector()
     if isElement(wnd) then destroyElement(wnd) wnd = nil end
 

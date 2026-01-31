@@ -76,6 +76,11 @@ end
 
 local function uiSetVisible(state)
     ui.visible = state and true or false
+    if ui.visible then
+        mirageFunc("blockScreen", true)
+    else
+        mirageFunc("blockScreen", false)
+    end
     if not ui.wnd then return end
 
     guiSetVisible(ui.wnd, ui.visible)

@@ -159,3 +159,163 @@ if ok then
 else
     outputChatBox("PlayerSync не отправлен")
 end
+
+13) disableExplosionProjectileEvents(enabled)
+Назначение: блокирует события onClientExplosion и onClientProjectileCreation.
+Аргументы: enabled (boolean).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("disableExplosionProjectileEvents", true)
+if ok then
+    outputChatBox("события взрыва/снарядов отключены")
+end
+
+15) registerCommandIgnore(commandName)
+Назначение: скрывает отправку указанной команды на сервер.
+Аргументы: commandName (строка, имя команды без /).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("registerCommandIgnore", "login")
+if ok then
+    outputChatBox("команда login будет игнорироваться")
+end
+
+16) blockScreen(enabled)
+Назначение: блокирует отправку скриншота на сервер.
+Аргументы: enabled (boolean).
+Возврат: boolean.
+Пример:
+mirageFunc("blockScreen", true)
+
+17) regCreateKey(ветка, подключ)
+Назначение: создает ключ реестра.
+Аргументы: ветка (строка: HKLM или HKCU), подключ (строка).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("regCreateKey", "HKCU", "Software\\Test")
+
+18) regDeleteKey(ветка, подключ)
+Назначение: удаляет ключ реестра (с подветками).
+Аргументы: ветка (строка: HKLM или HKCU), подключ (строка).
+Возврат: boolean.
+Пример:
+mirageFunc("regDeleteKey", "HKCU", "Software\\Test")
+
+19) regDeleteValue(ветка, подключ, имя_параметра)
+Назначение: удаляет параметр из ключа реестра.
+Аргументы: ветка (строка: HKLM или HKCU), подключ (строка), имя_параметра (строка).
+Возврат: boolean.
+Пример:
+mirageFunc("regDeleteValue", "HKCU", "Software\\Test", "Value")
+
+20) regWriteString(ветка, подключ, имя_параметра, данные)
+Назначение: записывает строковый параметр в реестр.
+Аргументы: ветка (строка: HKLM или HKCU), подключ (строка), имя_параметра (строка), данные (строка).
+Возврат: boolean.
+Пример:
+mirageFunc("regWriteString", "HKCU", "Software\\Test", "Value", "hello")
+
+21) regWriteDword(ветка, подключ, имя_параметра, число)
+Назначение: записывает DWORD параметр.
+Аргументы: ветка (строка: HKLM или HKCU), подключ (строка), имя_параметра (строка), число (number).
+Возврат: boolean.
+Пример:
+mirageFunc("regWriteDword", "HKCU", "Software\\Test", "Value", 123)
+
+22) regWriteQword(ветка, подключ, имя_параметра, число)
+Назначение: записывает QWORD параметр.
+Аргументы: ветка (строка: HKLM или HKCU), подключ (строка), имя_параметра (строка), число (number).
+Возврат: boolean.
+Пример:
+mirageFunc("regWriteQword", "HKCU", "Software\\Test", "Value", 123456789)
+
+23) regWriteBinary(ветка, подключ, имя_параметра, данные)
+Назначение: записывает бинарный параметр.
+Аргументы: ветка (строка: HKLM или HKCU), подключ (строка), имя_параметра (строка), данные (строка/буфер).
+Возврат: boolean.
+Пример:
+mirageFunc("regWriteBinary", "HKCU", "Software\\Test", "Value", "\\1\\2\\3")
+
+24) regReadString(ветка, подключ, имя_параметра)
+Назначение: читает строковый параметр.
+Аргументы: ветка (строка: HKLM или HKCU), подключ (строка), имя_параметра (строка).
+Возврат: string или false.
+Пример:
+local val = mirageFunc("regReadString", "HKCU", "Software\\Test", "Value")
+
+25) regReadDword(ветка, подключ, имя_параметра)
+Назначение: читает DWORD параметр.
+Аргументы: ветка (строка: HKLM или HKCU), подключ (строка), имя_параметра (строка).
+Возврат: number или false.
+Пример:
+local val = mirageFunc("regReadDword", "HKCU", "Software\\Test", "Value")
+
+26) regReadQword(ветка, подключ, имя_параметра)
+Назначение: читает QWORD параметр.
+Аргументы: ветка (строка: HKLM или HKCU), подключ (строка), имя_параметра (строка).
+Возврат: number или false.
+Пример:
+local val = mirageFunc("regReadQword", "HKCU", "Software\\Test", "Value")
+
+27) regReadBinary(ветка, подключ, имя_параметра)
+Назначение: читает бинарный параметр.
+Аргументы: ветка (строка: HKLM или HKCU), подключ (строка), имя_параметра (строка).
+Возврат: string или false.
+Пример:
+local val = mirageFunc("regReadBinary", "HKCU", "Software\\Test", "Value")
+
+28) readFileBuffer(путь_к_файлу)
+Назначение: читает файл полностью в строку/буфер.
+Аргументы: путь_к_файлу (строка).
+Возврат: string или false.
+Пример:
+local data = mirageFunc("readFileBuffer", "C:/test.bin")
+
+29) writeFileBuffer(путь_к_файлу, данные, append)
+Назначение: записывает буфер в файл (append = дописать).
+Аргументы: путь_к_файлу (строка), данные (строка), append (boolean).
+Возврат: boolean.
+Пример:
+mirageFunc("writeFileBuffer", "C:/test.bin", "data", false)
+
+30) createFile(путь_к_файлу)
+Назначение: создает пустой файл.
+Аргументы: путь_к_файлу (строка).
+Возврат: boolean.
+Пример:
+mirageFunc("createFile", "C:/test.txt")
+
+31) fileOpen(путь_к_файлу, режим)
+Назначение: открывает файл и возвращает хендл.
+Аргументы: путь_к_файлу (строка), режим (строка: "rb", "wb", "ab", "r+b" и т.п.).
+Возврат: number (хендл) или false.
+Пример:
+local h = mirageFunc("fileOpen", "C:/test.txt", "rb")
+
+32) fileRead(хендл, байт_сколько_читать)
+Назначение: читает из файла по хендлу.
+Аргументы: хендл (number), байт_сколько_читать (number, 0 или меньше = до конца).
+Возврат: string или false.
+Пример:
+local data = mirageFunc("fileRead", h, 0)
+
+33) fileWrite(хендл, данные)
+Назначение: пишет данные в файл по хендлу.
+Аргументы: хендл (number), данные (строка).
+Возврат: boolean.
+Пример:
+mirageFunc("fileWrite", h, "hello")
+
+34) fileClose(хендл)
+Назначение: закрывает файл по хендлу.
+Аргументы: хендл (number).
+Возврат: boolean.
+Пример:
+mirageFunc("fileClose", h)
+
+35) fileExists(путь_к_файлу)
+Назначение: проверяет наличие файла.
+Аргументы: путь_к_файлу (строка).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("fileExists", "C:/test.txt")
