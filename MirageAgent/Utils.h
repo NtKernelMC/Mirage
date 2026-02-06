@@ -50,7 +50,6 @@
 #include <winternl.h>
 #pragma comment(lib, "Shell32.lib")
 #pragma comment(lib, "ntdll.lib")
-#pragma comment(lib, "libMinHook.x86.lib")
 #pragma comment(lib, "Winmm.lib")
 #include "NetAPI/CNet.h"
 #include "NetAPI/Packets.h"

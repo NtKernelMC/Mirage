@@ -63,7 +63,7 @@ public:
             }
             if (found)
             {
-                if (isJmp) // поддержка JMP сигнатур (более долговечные)
+                if (isJmp) // РїРѕРґРґРµСЂР¶РєР° JMP СЃРёРіРЅР°С‚СѓСЂ (Р±РѕР»РµРµ РґРѕР»РіРѕРІРµС‡РЅС‹Рµ)
                 {
                     DWORD addr = base + i;
                     int32_t offset = *(int32_t*)(addr + 1);
@@ -110,7 +110,7 @@ public:
         if (base == 0 || size == 0)
             return NULL;
 
-        // Преобразуем строку IDA-стиля в байты и маску
+        // РџСЂРµРѕР±СЂР°Р·СѓРµРј СЃС‚СЂРѕРєСѓ IDA-СЃС‚РёР»СЏ РІ Р±Р°Р№С‚С‹ Рё РјР°СЃРєСѓ
         std::vector<BYTE> patternBytes;
         std::vector<bool> patternMask;
 
@@ -137,7 +137,7 @@ public:
             i++;
         }
 
-        // Поиск паттерна по байтам и маске
+        // РџРѕРёСЃРє РїР°С‚С‚РµСЂРЅР° РїРѕ Р±Р°Р№С‚Р°Рј Рё РјР°СЃРєРµ
         if (patternBytes.empty() || size < patternBytes.size())
             return NULL;
 

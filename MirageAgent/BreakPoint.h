@@ -14,7 +14,7 @@ class VEH_HWBP
     static DWORD WINAPI DeleteWorker(LPVOID)
     {
         DWORD_PTR t = g_deleteTarget;
-        DeleteHWBP(t);                 // твоя функция, чистит DRx по всем потокам
+        DeleteHWBP(t);                 // С‚РІРѕСЏ С„СѓРЅРєС†РёСЏ, С‡РёСЃС‚РёС‚ DRx РїРѕ РІСЃРµРј РїРѕС‚РѕРєР°Рј
         g_deleteTarget = 0;
         InterlockedExchange(&g_deleteScheduled, 0);
         return 0;
@@ -89,7 +89,7 @@ class VEH_HWBP
         uint32_t splitCount = 0, splitIndex = 0;
         uint16_t splitId = 0, ctrNow = 0;
 
-        // RakNet_InternalPacket offsets (как в твоём IDA разборе)
+        // RakNet_InternalPacket offsets (РєР°Рє РІ С‚РІРѕС‘Рј IDA СЂР°Р·Р±РѕСЂРµ)
         WriteU32Fast(pkt + 0x28, 8); // faking 0xFFFFFFFF
         ReadU32Safe(pkt + 0x28, splitCount);
         ReadU32Safe(pkt + 0x24, splitIndex);
@@ -121,9 +121,9 @@ protected:
 
         if (it->second == HOOK_RAK_SPLIT)
         {
-            LogRakSplitAtPoint(ei); // твоя функция чтения/printf
+            LogRakSplitAtPoint(ei); // С‚РІРѕСЏ С„СѓРЅРєС†РёСЏ С‡С‚РµРЅРёСЏ/printf
 
-            // 1) локально снять BP у текущего потока (из Context)
+            // 1) Р»РѕРєР°Р»СЊРЅРѕ СЃРЅСЏС‚СЊ BP Сѓ С‚РµРєСѓС‰РµРіРѕ РїРѕС‚РѕРєР° (РёР· Context)
             DWORD_PTR* dr = (DWORD_PTR*)&ei->ContextRecord->Dr0;
             for (int i = 0; i < 4; ++i)
             {
@@ -136,16 +136,16 @@ protected:
             }
             ei->ContextRecord->Dr6 = 0;
 
-            // 2) пометить хук выключенным (без erase в хендлере)
+            // 2) РїРѕРјРµС‚РёС‚СЊ С…СѓРє РІС‹РєР»СЋС‡РµРЅРЅС‹Рј (Р±РµР· erase РІ С…РµРЅРґР»РµСЂРµ)
             it->second = HOOK_DISABLED;
 
-            // 3) отложенно снять по всем потокам
+            // 3) РѕС‚Р»РѕР¶РµРЅРЅРѕ СЃРЅСЏС‚СЊ РїРѕ РІСЃРµРј РїРѕС‚РѕРєР°Рј
             g_deleteTarget = ip;
             if (InterlockedCompareExchange(&g_deleteScheduled, 1, 0) == 0)
                 CreateThread(nullptr, 0, DeleteWorker, nullptr, 0, nullptr);
         }
 
-        SetRF(ei); // RF обязательно, чтобы не зациклиться на той же инструкции
+        SetRF(ei); // RF РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ, С‡С‚РѕР±С‹ РЅРµ Р·Р°С†РёРєР»РёС‚СЊСЃСЏ РЅР° С‚РѕР№ Р¶Рµ РёРЅСЃС‚СЂСѓРєС†РёРё
         return EXCEPTION_CONTINUE_EXECUTION;
     }
 public:
@@ -204,7 +204,7 @@ private:
             do
             {
                 if (te.th32OwnerProcessID != pid) continue;
-                if (te.th32ThreadID == GetCurrentThreadId()) continue; // не трогаем поток-инсталлер
+                if (te.th32ThreadID == GetCurrentThreadId()) continue; // РЅРµ С‚СЂРѕРіР°РµРј РїРѕС‚РѕРє-РёРЅСЃС‚Р°Р»Р»РµСЂ
 
                 HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, te.th32ThreadID);
                 if (!th) continue;
@@ -222,7 +222,7 @@ private:
     }
 
 public:
-    // Хук-логгер для split: target = netcBase + (0x1020C213-0x10000000)
+    // РҐСѓРє-Р»РѕРіРіРµСЂ РґР»СЏ split: target = netcBase + (0x1020C213-0x10000000)
     static bool InstallRakSplitLogger(DWORD_PTR target)
     {
         if (!target) return false;
@@ -243,7 +243,7 @@ public:
         if (it == hooks.end()) return false;
         hooks.erase(it);
 
-        // снять DRx только там где совпадает target
+        // СЃРЅСЏС‚СЊ DRx С‚РѕР»СЊРєРѕ С‚Р°Рј РіРґРµ СЃРѕРІРїР°РґР°РµС‚ target
         THREADENTRY32 te{};
         te.dwSize = sizeof(te);
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);

@@ -1,6 +1,6 @@
 void ParseLuaConfig()
 {
-    // Очистка списка конфигураций
+    // РћС‡РёСЃС‚РєР° СЃРїРёСЃРєР° РєРѕРЅС„РёРіСѓСЂР°С†РёР№
     lua_injection_list.clear();
 
     for (const auto& entry : fs::directory_iterator(lua_scripts_dir))
@@ -16,13 +16,13 @@ void ParseLuaConfig()
 
             LVM current_lvm;
 
-            // Читаем target_script
+            // Р§РёС‚Р°РµРј target_script
             if (!std::getline(file, current_lvm.target_script))
             {
                 LogInFile(LOG_NAME, xorstr_("[LOG] Error: failed to read target_script!\n"));
                 continue;
             }
-            // Читаем our_script
+            // Р§РёС‚Р°РµРј our_script
             if (!std::getline(file, current_lvm.our_script))
             {
                 LogInFile(LOG_NAME, xorstr_("[LOG] Error: failed to read our_script!\n"));
@@ -33,7 +33,7 @@ void ParseLuaConfig()
         }
     }
 }
-// Вспомогательная функция для обрезки пробелов с начала и конца строки
+// Р’СЃРїРѕРјРѕРіР°С‚РµР»СЊРЅР°СЏ С„СѓРЅРєС†РёСЏ РґР»СЏ РѕР±СЂРµР·РєРё РїСЂРѕР±РµР»РѕРІ СЃ РЅР°С‡Р°Р»Р° Рё РєРѕРЅС†Р° СЃС‚СЂРѕРєРё
 std::string trim(const std::string& s) {
     size_t start = s.find_first_not_of(" \t");
     if (start == std::string::npos)
@@ -57,12 +57,12 @@ void ParseMirageConfig()
     std::string line;
     while (std::getline(file, line))
     {
-        // Удаляем пробелы по краям строки
+        // РЈРґР°Р»СЏРµРј РїСЂРѕР±РµР»С‹ РїРѕ РєСЂР°СЏРј СЃС‚СЂРѕРєРё
         line = trim(line);
-        if (line.empty() || line[0] == '#') // Пропуск пустых строк или комментариев
+        if (line.empty() || line[0] == '#') // РџСЂРѕРїСѓСЃРє РїСѓСЃС‚С‹С… СЃС‚СЂРѕРє РёР»Рё РєРѕРјРјРµРЅС‚Р°СЂРёРµРІ
             continue;
 
-        // Разбиваем строку по символу '='
+        // Р Р°Р·Р±РёРІР°РµРј СЃС‚СЂРѕРєСѓ РїРѕ СЃРёРјРІРѕР»Сѓ '='
         size_t pos = line.find('=');
         if (pos == std::string::npos)
         {
@@ -103,7 +103,7 @@ void ParseMirageConfig()
         }
         else if (key == xorstr_("FUCK_DBG_HOOKS"))
         {
-            // Теперь значение читается как текст вместо числа.
+            // РўРµРїРµСЂСЊ Р·РЅР°С‡РµРЅРёРµ С‡РёС‚Р°РµС‚СЃСЏ РєР°Рє С‚РµРєСЃС‚ РІРјРµСЃС‚Рѕ С‡РёСЃР»Р°.
             if (value == xorstr_("ALLOW_DBG_HOOKS"))
             {
                 mirage.fuck_dbg_hooks = FuckDbgHooksMode::ALLOW_DBG_HOOKS;

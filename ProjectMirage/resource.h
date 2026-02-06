@@ -1,6 +1,6 @@
 //{{NO_DEPENDENCIES}}
-// Включаемый файл, созданный в Microsoft Visual C++.
-// Используется ProjectMirage.rc
+// Р’РєР»СЋС‡Р°РµРјС‹Р№ С„Р°Р№Р», СЃРѕР·РґР°РЅРЅС‹Р№ РІ Microsoft Visual C++.
+// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ ProjectMirage.rc
 //
 #define IDI_ICON1                       101
 

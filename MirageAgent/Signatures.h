@@ -4,7 +4,7 @@ typedef bool(__thiscall* ptrStartGame)(void* ECX, const char* szNick, const char
 ptrStartGame callStartGame = nullptr;
 bool __fastcall StartGame(void* ECX, void* EDX, const char* szNick, const char* szPassword, int Type, const char* szSecret)
 {
-    RestorePrologue((DWORD)callStartGame, gamestart_prologue, sizeof(gamestart_prologue)); // восстанавливаем пролог функции
+    RestorePrologue((DWORD)callStartGame, gamestart_prologue, sizeof(gamestart_prologue)); // РІРѕСЃСЃС‚Р°РЅР°РІР»РёРІР°РµРј РїСЂРѕР»РѕРі С„СѓРЅРєС†РёРё
     bool rslt = callStartGame(ECX, szNick, szPassword, Type, szSecret);
     MakeJump((DWORD)callStartGame, (DWORD)&StartGame, gamestart_prologue, sizeof(gamestart_prologue));
     return rslt;
@@ -18,7 +18,7 @@ bool __fastcall ProcessMessage(void* ECX, void* EDX, HWND__* hwnd, unsigned int 
 }
 BOOL __stdcall hookGetThreadContext(HANDLE hThread, LPCONTEXT lpContext)
 {
-	RestorePrologue((DWORD)callGetThreadContext, thread_prologue, sizeof(thread_prologue)); // восстанавливаем пролог функции
+	RestorePrologue((DWORD)callGetThreadContext, thread_prologue, sizeof(thread_prologue)); // РІРѕСЃСЃС‚Р°РЅР°РІР»РёРІР°РµРј РїСЂРѕР»РѕРі С„СѓРЅРєС†РёРё
     BOOL rslt = callGetThreadContext(hThread, lpContext);
     if ((lpContext->Dr0 != NULL || lpContext->Dr1 != NULL || lpContext->Dr2 != NULL || lpContext->Dr3 != NULL) || lpContext->Dr7 != NULL)
     {
@@ -70,7 +70,7 @@ int __cdecl AddDebugHook(void* L)
                     call_pushstring(L, xorstr_("hookMeBitch"));
                     call_rawseti(L, 3, i);
                 }
-                call_settop(L, -2); // Удаляем элемент с вершины стека
+                call_settop(L, -2); // РЈРґР°Р»СЏРµРј СЌР»РµРјРµРЅС‚ СЃ РІРµСЂС€РёРЅС‹ СЃС‚РµРєР°
             }
         }
     }
@@ -102,17 +102,17 @@ std::string utf8_to_cp1251_safe(const char* data, size_t len)
 
     while (offset < len)
     {
-        // ищем следующий 0x00
+        // РёС‰РµРј СЃР»РµРґСѓСЋС‰РёР№ 0x00
         size_t next0 = offset;
         while (next0 < len && data[next0] != '\0')
             ++next0;
 
         const char* chunk = data + offset;
-        size_t      clen = next0 - offset;           // длина куска без 0
+        size_t      clen = next0 - offset;           // РґР»РёРЅР° РєСѓСЃРєР° Р±РµР· 0
 
         if (clen)
         {
-            // пробуем обычную конвертацию
+            // РїСЂРѕР±СѓРµРј РѕР±С‹С‡РЅСѓСЋ РєРѕРЅРІРµСЂС‚Р°С†РёСЋ
             int wlen = MultiByteToWideChar(
                 CP_UTF8, MB_ERR_INVALID_CHARS,
                 chunk, static_cast<int>(clen),
@@ -142,34 +142,34 @@ std::string utf8_to_cp1251_safe(const char* data, size_t len)
                 }
                 else
                 {
-                    // CP-1251 не смог — копируем «как есть»
+                    // CP-1251 РЅРµ СЃРјРѕРі вЂ” РєРѕРїРёСЂСѓРµРј В«РєР°Рє РµСЃС‚СЊВ»
                     out.append(chunk, clen);
                 }
             }
             else
             {
-                // битый UTF-8 — копируем «как есть»
+                // Р±РёС‚С‹Р№ UTF-8 вЂ” РєРѕРїРёСЂСѓРµРј В«РєР°Рє РµСЃС‚СЊВ»
                 out.append(chunk, clen);
             }
         }
 
-        // если встретили 0x00 в середине буфера — сохраняем его тоже
+        // РµСЃР»Рё РІСЃС‚СЂРµС‚РёР»Рё 0x00 РІ СЃРµСЂРµРґРёРЅРµ Р±СѓС„РµСЂР° вЂ” СЃРѕС…СЂР°РЅСЏРµРј РµРіРѕ С‚РѕР¶Рµ
         if (next0 < len)
             out.push_back('\0');
 
-        offset = next0 + 1;   // переходим за найденный 0
+        offset = next0 + 1;   // РїРµСЂРµС…РѕРґРёРј Р·Р° РЅР°Р№РґРµРЅРЅС‹Р№ 0
     }
 
     return out;
 }
 static std::string GenerateDumpPath()
 {
-    // Время в мс от эпохи Unix
+    // Р’СЂРµРјСЏ РІ РјСЃ РѕС‚ СЌРїРѕС…Рё Unix
     const uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch())
         .count();
 
-    // Потокобезопасный RNG
+    // РџРѕС‚РѕРєРѕР±РµР·РѕРїР°СЃРЅС‹Р№ RNG
     thread_local std::mt19937 rng{
         static_cast<std::mt19937::result_type>(
             std::chrono::steady_clock::now().time_since_epoch().count()) };
@@ -184,7 +184,7 @@ static std::string GenerateDumpPath()
 
 typedef void(__thiscall* ptrDecodeAndBuffer)(void* ECX, char* pBuffer, unsigned int bytesWritten);
 ptrDecodeAndBuffer callDecodeAndBuffer = nullptr;
-// Хук-обёртка оригинальной функции
+// РҐСѓРє-РѕР±С‘СЂС‚РєР° РѕСЂРёРіРёРЅР°Р»СЊРЅРѕР№ С„СѓРЅРєС†РёРё
 void __fastcall DecodeAndBuffer(void* ECX, void* EDX, char* pBuffer, unsigned int bytesWritten)
 {
     if (pBuffer && bytesWritten > 10000 && cursed_voice)
@@ -233,7 +233,7 @@ bool __fastcall IsNameAllowed(void* ECX, void* EDX, const char* szName, void* ev
         if (szName != nullptr && !strcmp(szName, hook.c_str()) && HideCall)
         {
             //LogInFile(LOG_NAME, xorstr_("[LOG] Hook of %s is skipped!\n"), szName);
-            return false; // Блокируем хук
+            return false; // Р‘Р»РѕРєРёСЂСѓРµРј С…СѓРє
         }
     }
     return callIsNameAllowed(ECX, szName, eventHookList, bNameMustBeExplicitlyAllowed);

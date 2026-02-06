@@ -9,8 +9,8 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 #pragma warning (disable : 4244)
-#define LOG_NAME xorstr_("MirageInjector.log") // Имя лог файла
-#define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
+#define LOG_NAME xorstr_("MirageInjector.log") // РРјСЏ Р»РѕРі С„Р°Р№Р»Р°
+#define WITH_LOGGING // Р—Р°РєРѕРјРµРЅС‚РёС‚СЊ С‡С‚РѕР±С‹ РѕС‚РєР»СЋС‡РёС‚СЊ РІС‹РІРѕРґ РІ Р»РѕРі С„Р°Р№Р»
 #include <Windows.h>
 #include <stdio.h>
 #include <filesystem>
@@ -133,7 +133,7 @@ void __stdcall LogInFile(std::string log_name, const char* log, ...)
     }
 #endif
 }
-// Вспомогательная функция для обрезки пробелов с начала и конца строки
+// Р’СЃРїРѕРјРѕРіР°С‚РµР»СЊРЅР°СЏ С„СѓРЅРєС†РёСЏ РґР»СЏ РѕР±СЂРµР·РєРё РїСЂРѕР±РµР»РѕРІ СЃ РЅР°С‡Р°Р»Р° Рё РєРѕРЅС†Р° СЃС‚СЂРѕРєРё
 std::string trim(const std::string& s) {
     size_t start = s.find_first_not_of(" \t");
     if (start == std::string::npos)
@@ -144,11 +144,11 @@ std::string trim(const std::string& s) {
 
 void ParseMirageConfig()
 {
-    // Пытаемся открыть конфигурационный файл для чтения
+    // РџС‹С‚Р°РµРјСЃСЏ РѕС‚РєСЂС‹С‚СЊ РєРѕРЅС„РёРіСѓСЂР°С†РёРѕРЅРЅС‹Р№ С„Р°Р№Р» РґР»СЏ С‡С‚РµРЅРёСЏ
     std::ifstream file(mirage_config_dir);
     if (!file.is_open())
     {
-        // Файл не найден, создаём файл конфигурации с содержимым по умолчанию
+        // Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ, СЃРѕР·РґР°С‘Рј С„Р°Р№Р» РєРѕРЅС„РёРіСѓСЂР°С†РёРё СЃ СЃРѕРґРµСЂР¶РёРјС‹Рј РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ
         std::ofstream outConfig(mirage_config_dir);
         if (outConfig.is_open())
         {
@@ -164,7 +164,7 @@ void ParseMirageConfig()
                 << xorstr_("DLL_INJECTION_TYPE=MMAP");
             outConfig.close();
             LogInFile(LOG_NAME, xorstr_("[LOG] Default config file created.\n"));
-            // Пытаемся снова открыть файл для чтения
+            // РџС‹С‚Р°РµРјСЃСЏ СЃРЅРѕРІР° РѕС‚РєСЂС‹С‚СЊ С„Р°Р№Р» РґР»СЏ С‡С‚РµРЅРёСЏ
             file.open(mirage_config_dir);
             if (!file.is_open())
             {
@@ -185,12 +185,12 @@ void ParseMirageConfig()
     std::string line;
     while (std::getline(file, line))
     {
-        // Удаляем пробелы по краям строки
+        // РЈРґР°Р»СЏРµРј РїСЂРѕР±РµР»С‹ РїРѕ РєСЂР°СЏРј СЃС‚СЂРѕРєРё
         line = trim(line);
-        if (line.empty() || line[0] == '#') // Пропуск пустых строк или комментариев
+        if (line.empty() || line[0] == '#') // РџСЂРѕРїСѓСЃРє РїСѓСЃС‚С‹С… СЃС‚СЂРѕРє РёР»Рё РєРѕРјРјРµРЅС‚Р°СЂРёРµРІ
             continue;
 
-        // Разбиваем строку по символу '='
+        // Р Р°Р·Р±РёРІР°РµРј СЃС‚СЂРѕРєСѓ РїРѕ СЃРёРјРІРѕР»Сѓ '='
         size_t pos = line.find('=');
         if (pos == std::string::npos)
         {
@@ -229,7 +229,7 @@ void ParseMirageConfig()
         }
         else if (key == xorstr_("FUCK_DBG_HOOKS"))
         {
-            // Теперь значение читается как текст вместо числа.
+            // РўРµРїРµСЂСЊ Р·РЅР°С‡РµРЅРёРµ С‡РёС‚Р°РµС‚СЃСЏ РєР°Рє С‚РµРєСЃС‚ РІРјРµСЃС‚Рѕ С‡РёСЃР»Р°.
             if (value == xorstr_("ALLOW_DBG_HOOKS"))
             {
                 mirage.fuck_dbg_hooks = FuckDbgHooksMode::ALLOW_DBG_HOOKS;
@@ -297,7 +297,7 @@ void ParseMirageConfig()
         }
         else if (key == xorstr_("DUMP_RESOURCE_NAME"))
         {
-            mirage.dump_resource_name = value; // Здесь можно также выполнить дополнительную обработку при необходимости
+            mirage.dump_resource_name = value; // Р—РґРµСЃСЊ РјРѕР¶РЅРѕ С‚Р°РєР¶Рµ РІС‹РїРѕР»РЅРёС‚СЊ РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅСѓСЋ РѕР±СЂР°Р±РѕС‚РєСѓ РїСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё
         }
         else if (key == xorstr_("DUMP_ALL_SCRIPTS"))
         {
@@ -381,7 +381,7 @@ std::string CvWideToAnsi(const std::wstring& wstr)
     std::wstring_convert<convert_typeX, wchar_t> converterX;
     return converterX.to_bytes(wstr);
 }
-// Функция, которая ищет поток целевого процесса, у которого есть хотя бы одно окно
+// Р¤СѓРЅРєС†РёСЏ, РєРѕС‚РѕСЂР°СЏ РёС‰РµС‚ РїРѕС‚РѕРє С†РµР»РµРІРѕРіРѕ РїСЂРѕС†РµСЃСЃР°, Сѓ РєРѕС‚РѕСЂРѕРіРѕ РµСЃС‚СЊ С…РѕС‚СЏ Р±С‹ РѕРґРЅРѕ РѕРєРЅРѕ
 DWORD GetThreadWithWindow(DWORD processID)
 {
     DWORD threadID = 0;
@@ -396,13 +396,13 @@ DWORD GetThreadWithWindow(DWORD processID)
                 if (te.th32OwnerProcessID == processID)
                 {
                     HWND hWnd = nullptr;
-                    // Перебираем окна данного потока
+                    // РџРµСЂРµР±РёСЂР°РµРј РѕРєРЅР° РґР°РЅРЅРѕРіРѕ РїРѕС‚РѕРєР°
                     EnumThreadWindows(te.th32ThreadID,
                         [](HWND hwnd, LPARAM lParam) -> BOOL {
                             HWND* phWnd = reinterpret_cast<HWND*>(lParam);
-                            // Можно добавить дополнительные проверки (например, IsWindowVisible)
+                            // РњРѕР¶РЅРѕ РґРѕР±Р°РІРёС‚СЊ РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Рµ РїСЂРѕРІРµСЂРєРё (РЅР°РїСЂРёРјРµСЂ, IsWindowVisible)
                             *phWnd = hwnd;
-                            return FALSE; // Нашли окно – прекращаем перебор для данного потока
+                            return FALSE; // РќР°С€Р»Рё РѕРєРЅРѕ вЂ“ РїСЂРµРєСЂР°С‰Р°РµРј РїРµСЂРµР±РѕСЂ РґР»СЏ РґР°РЅРЅРѕРіРѕ РїРѕС‚РѕРєР°
                         },
                         reinterpret_cast<LPARAM>(&hWnd));
 
@@ -436,7 +436,7 @@ bool FuckObCallbacks(uint32_t magic)
     if (h == INVALID_HANDLE_VALUE)
     {
         DWORD errorik = GetLastError();
-        if (errorik == 2) LogInFile(LOG_NAME, xorstr_("FairplayKD драйвер не запущен!\n"));
+        if (errorik == 2) LogInFile(LOG_NAME, xorstr_("FairplayKD РґСЂР°Р№РІРµСЂ РЅРµ Р·Р°РїСѓС‰РµРЅ!\n"));
         else LogInFile(LOG_NAME, xorstr_("CreateFile failed: %d\n"), errorik);
         return false;
     }

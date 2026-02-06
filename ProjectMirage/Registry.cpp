@@ -163,7 +163,7 @@ void CEasyRegistry::WriteString(LPCWSTR lpName, LPCWSTR lpString, bool multi_sz,
 {
 	va_list ap;
 	size_t len = wcslen(lpString);
-	// Выделяем буфер для wide строки
+	// Р’С‹РґРµР»СЏРµРј Р±СѓС„РµСЂ РґР»СЏ wide СЃС‚СЂРѕРєРё
 	wchar_t* szStr = new wchar_t[len * 2 + 1024];
 	va_start(ap, lpString);
 	vswprintf_s(szStr, len * 2 + 1024, lpString, ap);

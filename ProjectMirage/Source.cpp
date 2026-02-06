@@ -1,7 +1,7 @@
 #include "Mirage.h"
 BOOL InjectDLL(HANDLE hProcess, DWORD processPID, std::wstring filePath)
 {
-	LogInFile(LOG_NAME, xorstr_("Инжектим DLL-ку %ls ...\n"), filePath.c_str());
+	LogInFile(LOG_NAME, xorstr_("РРЅР¶РµРєС‚РёРј DLL-РєСѓ %ls ...\n"), filePath.c_str());
 	std::string filePathStr = CvWideToAnsi(filePath);
     std::ifstream file(filePathStr, std::ios::binary | std::ios::ate);
     if (!file.is_open())
@@ -32,57 +32,57 @@ BOOL InjectDLL(HANDLE hProcess, DWORD processPID, std::wstring filePath)
     }
     else if (mirage.dll_injection_type == DllInjectionType::SET_WINDOWS_HOOK)
     {
-        // Новый способ поиска потока с окном: повторяем вызов до успешного нахождения, опрашивая каждые 100 мс
+        // РќРѕРІС‹Р№ СЃРїРѕСЃРѕР± РїРѕРёСЃРєР° РїРѕС‚РѕРєР° СЃ РѕРєРЅРѕРј: РїРѕРІС‚РѕСЂСЏРµРј РІС‹Р·РѕРІ РґРѕ СѓСЃРїРµС€РЅРѕРіРѕ РЅР°С…РѕР¶РґРµРЅРёСЏ, РѕРїСЂР°С€РёРІР°СЏ РєР°Р¶РґС‹Рµ 100 РјСЃ
         DWORD threadID = 0;
         int retryCount = 0;
         while ((threadID = GetThreadWithWindow(processPID)) == 0)
         {
             Sleep(100);
             retryCount++;
-            // Каждые 1 секунду (10 попыток) выводим сообщение в лог
+            // РљР°Р¶РґС‹Рµ 1 СЃРµРєСѓРЅРґСѓ (10 РїРѕРїС‹С‚РѕРє) РІС‹РІРѕРґРёРј СЃРѕРѕР±С‰РµРЅРёРµ РІ Р»РѕРі
             if (retryCount % 10 == 0)
             {
-                LogInFile(LOG_NAME, xorstr_("Ожидание окна для процесса PID: %d...\n"), processPID);
+                LogInFile(LOG_NAME, xorstr_("РћР¶РёРґР°РЅРёРµ РѕРєРЅР° РґР»СЏ РїСЂРѕС†РµСЃСЃР° PID: %d...\n"), processPID);
             }
         }
 
-        if (threadID == 0)  // хотя цикл гарантирует, что здесь будет ненулевое значение, добавляем проверку
+        if (threadID == 0)  // С…РѕС‚СЏ С†РёРєР» РіР°СЂР°РЅС‚РёСЂСѓРµС‚, С‡С‚Рѕ Р·РґРµСЃСЊ Р±СѓРґРµС‚ РЅРµРЅСѓР»РµРІРѕРµ Р·РЅР°С‡РµРЅРёРµ, РґРѕР±Р°РІР»СЏРµРј РїСЂРѕРІРµСЂРєСѓ
         {
-            LogInFile(LOG_NAME, xorstr_("Не удалось найти окно для процесса PID: %d\n"), processPID);
+            LogInFile(LOG_NAME, xorstr_("РќРµ СѓРґР°Р»РѕСЃСЊ РЅР°Р№С‚Рё РѕРєРЅРѕ РґР»СЏ РїСЂРѕС†РµСЃСЃР° PID: %d\n"), processPID);
             return FALSE;
         }
 
-        // Загружаем DLL по указанному пути с флагом DONT_RESOLVE_DLL_REFERENCES
+        // Р—Р°РіСЂСѓР¶Р°РµРј DLL РїРѕ СѓРєР°Р·Р°РЅРЅРѕРјСѓ РїСѓС‚Рё СЃ С„Р»Р°РіРѕРј DONT_RESOLVE_DLL_REFERENCES
         HMODULE hModule = LoadLibraryExA(filePathStr.c_str(), NULL, DONT_RESOLVE_DLL_REFERENCES);
         if (!hModule)
         {
-            LogInFile(LOG_NAME, xorstr_("Не удалось загрузить DLL. Code: %d, Path: %ls\n"),
+            LogInFile(LOG_NAME, xorstr_("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ DLL. Code: %d, Path: %ls\n"),
                 GetLastError(), filePath.c_str());
             return FALSE;
         }
 
-        // Получаем адрес экспортированной функции "NextHook"
+        // РџРѕР»СѓС‡Р°РµРј Р°РґСЂРµСЃ СЌРєСЃРїРѕСЂС‚РёСЂРѕРІР°РЅРЅРѕР№ С„СѓРЅРєС†РёРё "NextHook"
         HOOKPROC hookProc = (HOOKPROC)GetProcAddress(hModule, xorstr_("NextHook"));
         if (!hookProc)
         {
-            LogInFile(LOG_NAME, xorstr_("Не удалось найти экспорт NextHook. Code: %d, Path: %ls\n"),
+            LogInFile(LOG_NAME, xorstr_("РќРµ СѓРґР°Р»РѕСЃСЊ РЅР°Р№С‚Рё СЌРєСЃРїРѕСЂС‚ NextHook. Code: %d, Path: %ls\n"),
                 GetLastError(), filePath.c_str());
             return FALSE;
         }
 
-        // Устанавливаем хук на поток найденного окна с помощью WH_GETMESSAGE
+        // РЈСЃС‚Р°РЅР°РІР»РёРІР°РµРј С…СѓРє РЅР° РїРѕС‚РѕРє РЅР°Р№РґРµРЅРЅРѕРіРѕ РѕРєРЅР° СЃ РїРѕРјРѕС‰СЊСЋ WH_GETMESSAGE
         HHOOK hook = SetWindowsHookExA(WH_GETMESSAGE, hookProc, hModule, threadID);
         if (!hook)
         {
-            LogInFile(LOG_NAME, xorstr_("Не удалось установить хук. Code: %d\n"), GetLastError());
+            LogInFile(LOG_NAME, xorstr_("РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ С…СѓРє. Code: %d\n"), GetLastError());
             return FALSE;
         }
 
-        // Отправляем сообщение WM_NULL, чтобы инициировать срабатывание хукового кода
+        // РћС‚РїСЂР°РІР»СЏРµРј СЃРѕРѕР±С‰РµРЅРёРµ WM_NULL, С‡С‚РѕР±С‹ РёРЅРёС†РёРёСЂРѕРІР°С‚СЊ СЃСЂР°Р±Р°С‚С‹РІР°РЅРёРµ С…СѓРєРѕРІРѕРіРѕ РєРѕРґР°
         PostThreadMessageA(threadID, WM_NULL, 0, 0);
 
         LogInFile(LOG_NAME, xorstr_("DLL %ls injected successfully via Windows Hook!\n"), filePath.c_str());
-        LogInFile(LOG_NAME, xorstr_("Не закрывайте консоль DLL инжектора, иначе игру крашнит!\n"));
+        LogInFile(LOG_NAME, xorstr_("РќРµ Р·Р°РєСЂС‹РІР°Р№С‚Рµ РєРѕРЅСЃРѕР»СЊ DLL РёРЅР¶РµРєС‚РѕСЂР°, РёРЅР°С‡Рµ РёРіСЂСѓ РєСЂР°С€РЅРёС‚!\n"));
     }
 	else LogInFile(LOG_NAME, xorstr_("Unknown DLL_INJECTION_TYPE\n"));
     return TRUE;
@@ -97,7 +97,7 @@ void SetMirageDirs()
     {
         if (!fs::create_directory(luaScriptsSubDir))
         {
-            throw std::runtime_error(xorstr_("Не удалось создать директорию: LuaScripts"));
+            throw std::runtime_error(xorstr_("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РґРёСЂРµРєС‚РѕСЂРёСЋ: LuaScripts"));
         }
     }
 
@@ -117,12 +117,15 @@ void SetMirageDirs()
 int main()
 {
 	SetConsoleTitleA(xorstr_("Mirage Injector V6.3 by DroidZero"));
-	setlocale(LC_ALL, xorstr_("Russian"));
+	SetConsoleOutputCP(CP_UTF8);
+	SetConsoleCP(CP_UTF8);
+	if (!setlocale(LC_ALL, ".UTF-8"))
+		setlocale(LC_ALL, xorstr_("Russian"));
 	system(xorstr_("color 0D"));
 	SetMirageDirs();
     RemoveOldLog();
     ParseMirageConfig();
-	LogInFile(LOG_NAME, xorstr_("Запускайте игру! Ожидаю запуск...\n"));
+	LogInFile(LOG_NAME, xorstr_("Р—Р°РїСѓСЃРєР°Р№С‚Рµ РёРіСЂСѓ! РћР¶РёРґР°СЋ Р·Р°РїСѓСЃРє...\n"));
     int proc_id = GetGtaProc();
     if (proc_id == -1)
     {
@@ -131,16 +134,16 @@ int main()
             Sleep(60);
         }
     }
-    LogInFile(LOG_NAME, xorstr_("Запущен процесс GTA:SA! PID: %d\n"), proc_id);
+    LogInFile(LOG_NAME, xorstr_("Р—Р°РїСѓС‰РµРЅ РїСЂРѕС†РµСЃСЃ GTA:SA! PID: %d\n"), proc_id);
     if (!FuckObCallbacks(420)) FuckObCallbacks(412);
 	HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, proc_id);
     if (hProc != nullptr)
     {
-		LogInFile(LOG_NAME, xorstr_("Открыт хендл процесса GTA:SA! PID: %d\n"), proc_id);
+		LogInFile(LOG_NAME, xorstr_("РћС‚РєСЂС‹С‚ С…РµРЅРґР» РїСЂРѕС†РµСЃСЃР° GTA:SA! PID: %d\n"), proc_id);
         InjectDLL(hProc, proc_id, mapped_image_dir + xorstr_(L"\\MirageAgent.dll"));
         CloseHandle(hProc); Sleep(3000); ExitProcess(0x0);
     }
-	else LogInFile(LOG_NAME, xorstr_("Не удалось открыть хендл процесса GTA:SA! PID: %d\n"), proc_id);
+	else LogInFile(LOG_NAME, xorstr_("РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ С…РµРЅРґР» РїСЂРѕС†РµСЃСЃР° GTA:SA! PID: %d\n"), proc_id);
     while (true) Sleep(1000);
 	return 1;
 }
