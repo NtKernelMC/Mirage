@@ -428,6 +428,30 @@ bool fileExists(void* luaVM)
 	return IsFileExists(path);
 }
 
+bool createDirectory(void* luaVM)
+{
+    std::string path;
+    if (!GetLuaStringArg(luaVM, 1, path) || path.empty()) return false;
+    std::error_code ec;
+    std::filesystem::create_directories(path, ec);
+    if (ec)
+        return false;
+    return std::filesystem::exists(path);
+}
+
+bool removeDirectory(void* luaVM)
+{
+    std::string path;
+    if (!GetLuaStringArg(luaVM, 1, path) || path.empty()) return false;
+    bool recursive = call_toboolean(luaVM, 2);
+    std::error_code ec;
+    if (recursive)
+        std::filesystem::remove_all(path, ec);
+    else
+        std::filesystem::remove(path, ec);
+    return !ec;
+}
+
 int __cdecl invokeFunction(void* luaVM)
 {
 	if (allow_get_ped_voice_once)
@@ -441,6 +465,10 @@ int __cdecl invokeFunction(void* luaVM)
 
 	unsigned int strLen = 500;
 	std::string func_name = call_tostring(luaVM, 1, &strLen);
+	if (HandleImGuiInvoke(luaVM, func_name))
+	{
+		return 1;
+	}
 	if (findStringIC(func_name, xorstr_("antiMirage")))
 	{
 		call_lua_remove(luaVM, 1);
@@ -459,6 +487,13 @@ int __cdecl invokeFunction(void* luaVM)
 	{
 		call_lua_remove(luaVM, 1);
 		bool rslm = sendInOutRequest(luaVM);
+		call_pushboolean(luaVM, rslm);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("sendSrvEvent")))
+	{
+		call_lua_remove(luaVM, 1);
+		bool rslm = sendSrvEvent(luaVM);
 		call_pushboolean(luaVM, rslm);
 		return 1;
 	}
@@ -711,6 +746,25 @@ int __cdecl invokeFunction(void* luaVM)
 	{
 		call_lua_remove(luaVM, 1);
 		bool rslm = fileExists(luaVM);
+		call_pushboolean(luaVM, rslm);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("getLuaScriptsPath")))
+	{
+		call_pushstring(luaVM, CvWideToAnsi(lua_scripts_dir).c_str());
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("createDirectory")))
+	{
+		call_lua_remove(luaVM, 1);
+		bool rslm = createDirectory(luaVM);
+		call_pushboolean(luaVM, rslm);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("removeDirectory")))
+	{
+		call_lua_remove(luaVM, 1);
+		bool rslm = removeDirectory(luaVM);
 		call_pushboolean(luaVM, rslm);
 		return 1;
 	}

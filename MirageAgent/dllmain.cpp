@@ -1,4 +1,4 @@
-﻿#include "Utils.h"
+#include "Utils.h"
 #include "AesCryptor.h"
 #include "CShooting.h"
 #include "LuaInjector.h"
@@ -81,7 +81,7 @@ void AsyncThread()
 	HMODULE hKernelBase = GetModuleHandleA(xorstr_("kernelbase.dll")); //kernelbase
 	HMODULE hKernel32_2 = GetModuleHandleA(xorstr_("kernel32.dll"));
 	HMODULE hForLoadLib = hKernelBase ? hKernelBase : hKernel32_2;
-	if (hForLoadLib)
+    if (hForLoadLib)
 	{
 		callLoadLibraryExW = (ptrLoadLibraryExW)GetProcAddress(hForLoadLib, xorstr_("LoadLibraryExW"));
 		if (callLoadLibraryExW != nullptr)
@@ -91,8 +91,11 @@ void AsyncThread()
 			LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW is Hooked!\n"));
 		}
 		else LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW export is NULL!\n"));
+
 	}
     else LogInFile(LOG_NAME, xorstr_("[LOG] GetModuleHandleA to kernelbase/kernel32 module is NULL!\n"));
+
+    StartImGuiHookingAsync();
     //DROID_VM_FINISH();
 }
 
@@ -111,6 +114,7 @@ int __stdcall DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         AsyncBitch();
         break;
     case DLL_PROCESS_DETACH:
+        ShutdownImGuiHooking();
         break;
     }
     return TRUE;

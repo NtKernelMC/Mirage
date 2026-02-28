@@ -1,4 +1,4 @@
-﻿#ifndef _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
+#ifndef _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #endif
 #ifndef _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
@@ -10,7 +10,7 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("V6.3") // Версия инжектора
+#define MIRAGE_VERSION xorstr_("V6.4") // Версия инжектора
 #define TO_ELEMENTID(x) ((ElementID) reinterpret_cast < unsigned long > (x) )
 #include <Windows.h>
 #include <stdio.h>
@@ -411,6 +411,7 @@ DWORD WINAPI SniperThread(LPVOID)
 }
 #include "Utils/NetPackets.h"
 #include "Utils/FileSystem.h"
+#include "Utils/ImGuiIntegration.h"
 #include "Utils/LuaCommands.h"
 void CorePatcher()
 {

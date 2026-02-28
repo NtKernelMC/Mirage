@@ -361,3 +361,61 @@ bool sendCameraSync(void* luaVM)
 	g_pNet->DeallocateNetBitStream(pBitStream);
 	return true;
 }
+
+bool sendSrvEvent(void* luaVM)
+{
+	if (!g_pNet) return false;
+
+	unsigned int eventNameLen = 0;
+	const char* eventName = call_tostring(luaVM, 1, &eventNameLen);
+	if (!eventName || eventNameLen == 0 || eventNameLen >= MAX_EVENT_NAME_LENGTH) return false;
+
+	unsigned int countLen = 0;
+	const char* countStr = call_tostring(luaVM, 2, &countLen);
+	if (!countStr || countLen == 0) return false;
+
+	int tableCount = 0;
+	try
+	{
+		tableCount = std::stoi(std::string(countStr, countLen));
+	}
+	catch (...)
+	{
+		return false;
+	}
+	if (tableCount < 0) return false;
+
+	NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+	if (!pBitStream) return false;
+
+	const unsigned short usNameLength = static_cast<unsigned short>(eventNameLen);
+	const unsigned int uiNumArgs = static_cast<unsigned int>(tableCount);
+	const ElementID sourceElement = ElementID(0);
+	constexpr unsigned char LUA_TNIL_TYPE = 0;
+	constexpr unsigned char LUA_TTABLE_TYPE = 5;
+
+	pBitStream->WriteCompressed(usNameLength);
+	pBitStream->Write(eventName, usNameLength);
+	pBitStream->Write(sourceElement);
+
+	// CLuaArguments::uiNumArgs
+	pBitStream->WriteCompressed(uiNumArgs);
+
+	// Each argument is a table that contains only TNIL.
+	for (unsigned int i = 0; i < uiNumArgs; ++i)
+	{
+		SLuaTypeSync typeTable{};
+		typeTable.data.ucType = LUA_TTABLE_TYPE;
+		pBitStream->Write(&typeTable);
+
+		pBitStream->WriteCompressed(1u);
+
+		SLuaTypeSync typeNil{};
+		typeNil.data.ucType = LUA_TNIL_TYPE;
+		pBitStream->Write(&typeNil);
+	}
+
+	g_pNet->SendPacket(PACKET_ID_LUA_EVENT, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+	g_pNet->DeallocateNetBitStream(pBitStream);
+	return true;
+}

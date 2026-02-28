@@ -1,4 +1,4 @@
-﻿#include "ShadowTrace.h"
+#include "ShadowTrace.h"
 #include <unordered_set>
 
 namespace ModernBypass
@@ -13,7 +13,7 @@ namespace ModernBypass
 		CNetAPI = ECX;
 		g_pNet = (CNet*)ECX;
 		RestorePrologue((DWORD)callSendPacket, packet_prologue, sizeof(packet_prologue));
-		static bool init_priv_gen = false;
+		/*static bool init_priv_gen = false;
 		if (!init_priv_gen)
 		{
 			LogInFile(LOG_NAME, xorstr_("[LOG] Initializing Private Serial generator ...\n"));
@@ -25,8 +25,8 @@ namespace ModernBypass
 			}
 			else LogInFile(LOG_NAME, xorstr_("[ERROR] Failed to call InitializePrivateSerialGen.\n"));
 			init_priv_gen = true;
-		}
-		auto color_name = magic_enum::enum_name((ePacketID)ucPacketID);
+		}*/
+		//auto color_name = magic_enum::enum_name((ePacketID)ucPacketID);
 		//LogInFile(LOG_NAME, xorstr_("PacketID: %d | PacketName: %s\n"), ucPacketID, color_name.data());
 		/*if ((ucPacketID >= 91 && ucPacketID <= 94 && ucPacketID != 93) || ucPacketID == 34 || ucPacketID == 25)
 		{
@@ -82,23 +82,6 @@ namespace ModernBypass
 	};
 #pragma pack(pop)
 
-	typedef void(__thiscall* ptrRakNet_OutgoingPacketQueue_Push)(void* ECX, RakNet_InternalPacket** ppPkt);
-	ptrRakNet_OutgoingPacketQueue_Push callRakNet_OutgoingPacketQueue_Push = nullptr;
-	void __fastcall RakNet_OutgoingPacketQueue_Push(void* ECX, void *EDX, RakNet_InternalPacket** ppPkt)
-	{
-		if (ppPkt != nullptr)
-		{
-			RakNet_InternalPacket* internal_packet = *ppPkt;
-			if (internal_packet != nullptr)
-			{
-				if (internal_packet->splitPacketCount > 0)
-				{
-					LogInFile(LOG_NAME, xorstr_("[LOG] Split Count: %d | Split ID: %d!\n"), internal_packet->splitPacketCount, internal_packet->splitPacketId);
-				}
-			}
-		}
-		callRakNet_OutgoingPacketQueue_Push(ECX, ppPkt);
-	}
 	using ptrRakPeer_QueueBufferedPacket = int(__thiscall*)(void *ECX, void* payload, int bitLength, int priority,
 	int reliability, char orderingChannel, int targetIp, __int16 targetPort, char broadcast, int receiptNumber);
 	static ptrRakPeer_QueueBufferedPacket callRakPeer_QueueBufferedPacket = nullptr;
@@ -342,9 +325,9 @@ namespace ModernBypass
 	void EvadeAnticheat()
 	{
 		SigScan scan; MessageBeep(MB_ICONASTERISK);
-		ShadowTrace::InitWmiCacheOnce();
+		//ShadowTrace::InitWmiCacheOnce();
 		
-		callInitializePrivateSerialGen = (ptrInitializePrivateSerialGen)scan.FindCallPattern(xorstr_("netc.dll"),
+		/*callInitializePrivateSerialGen = (ptrInitializePrivateSerialGen)scan.FindCallPattern(xorstr_("netc.dll"),
 			xorstr_("E8 ? ? ? ? 33 C0 66 A3"));
 		if (callInitializePrivateSerialGen != nullptr)
 		{
@@ -370,7 +353,7 @@ namespace ModernBypass
 			MH_EnableHook(MH_ALL_HOOKS);
 			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to EncryptWmiBuffer!\n"));
 		}
-		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for EncryptWmiBuffer.\n"));
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for EncryptWmiBuffer.\n"));*/
 		/*call_moris_hook_scanner = (ptr_moris_hook_scanner)scan.FindPatternIDA(xorstr_("core.dll"),
 			xorstr_("55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? A1 ? ? ? ? 33 C5 89 45 ? 56 50 8D 45 ? 64 A3 ? ? ? ? 8B 75 ? 89 4D"));
 		if (call_moris_hook_scanner)
@@ -516,7 +499,6 @@ namespace LegacyBypass
 	{
 		CNetAPI = ECX;
 		g_pNet = (CNet*)ECX;
-		if (ucPacketID == 91) return true;
 		if (ucPacketID == PACKET_ID_VOICE_DATA && cursed_voice)
 		{
 			NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();

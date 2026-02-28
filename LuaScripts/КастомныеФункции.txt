@@ -319,3 +319,30 @@ mirageFunc("fileClose", h)
 Возврат: boolean.
 Пример:
 local ok = mirageFunc("fileExists", "C:/test.txt")
+
+36) getLuaScriptsPath()
+Назначение: возвращает путь, откуда Mirage грузит Lua скрипты.
+Возврат: string.
+Пример:
+local path = mirageFunc("getLuaScriptsPath")
+outputChatBox("Lua path: " .. tostring(path))
+
+37) createDirectory(путь)
+Назначение: создает директорию (включая вложенные).
+Аргументы: путь (строка).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("createDirectory", "C:/Mirage/TestDir")
+
+38) removeDirectory(путь, recursive)
+Назначение: удаляет директорию.
+Аргументы: путь (строка), recursive (boolean, true = удалить рекурсивно).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("removeDirectory", "C:/Mirage/TestDir", true)
+
+39) ImGui API
+Назначение: полный набор функций ImGui (окна, виджеты, темы, шрифты, изображения, draw-list примитивы, блок биндов/курсор, включая кастомную imgui.gradientButton и imgui.codeEditorLua с подсветкой Lua).
+Документация: файл `LuaScripts/ImGuiAPI.txt`.
+Примечание 1: config ImGui (`imgui.ini`) сохраняется в `%LOCALAPPDATA%\\Temp\\Mirage\\imgui.ini`.
+Примечание 2: для табов всегда держите пары `beginTabBar/endTabBar` и `beginTabItem/endTabItem` в каждом кадре.
