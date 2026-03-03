@@ -435,6 +435,18 @@ void SignatureScanner()
 	call_settop = (lua_settop)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_settop"));
 	if (call_settop != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_settop!\n"));
 	else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_settop.\n"));
+    call_lua_gettop = (ptr_lua_gettop)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_gettop"));
+    if (call_lua_gettop != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_gettop!\n"));
+    else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_gettop.\n"));
+    call_lua_pcall = (ptr_lua_pcall)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_pcall"));
+    if (call_lua_pcall != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_pcall!\n"));
+    else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_pcall.\n"));
+    call_luaL_loadbuffer_raw = (ptr_luaL_loadbuffer_raw)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("luaL_loadbuffer"));
+    if (call_luaL_loadbuffer_raw != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to luaL_loadbuffer (raw)!\n"));
+    else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for luaL_loadbuffer (raw).\n"));
+    call_lua_getmtasaowner = (ptr_lua_getmtasaowner)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_getmtasaowner"));
+    if (call_lua_getmtasaowner != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_getmtasaowner!\n"));
+    else LogInFile(LOG_NAME, xorstr_("[WARN] Can`t find a signature for lua_getmtasaowner (Lua threads VM context may be limited).\n"));
     HMODULE hLua = GetModuleHandleA(xorstr_("lua5.1c.dll"));
     if (hLua)
     {
@@ -483,5 +495,46 @@ void SignatureScanner()
             MH_EnableHook(MH_ALL_HOOKS);
         }
         else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a sig for IsNameAllowed!\n"));
+    }
+
+    // VM bridge for per-resource Lua threads.
+    // Method: CLuaManager::CreateVirtualMachine(CResource* pResourceOwner, bool bEnableOOP)
+    if (!callCreateVirtualMachine)
+    {
+        callCreateVirtualMachine = (ptrCreateVirtualMachine)scan.FindCallPattern(xorstr_("client.dll"), xorstr_("E8 ? ? ? ? 89 47 ? 85 C0 74")); // CLuaManager::CreateVirtualMachine
+        if (callCreateVirtualMachine)
+            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to CreateVirtualMachine.\n"));
+        else
+            LogInFile(LOG_NAME, xorstr_("[WARN] Can`t find signature for CreateVirtualMachine (pattern=example).\n"));
+    }
+
+    // Class: CLuaManager
+    // Method: CLuaManager::RemoveVirtualMachine(CLuaMain* vm)
+    if (!callRemoveVirtualMachine)
+    {
+        callRemoveVirtualMachine = (ptrRemoveVirtualMachine)scan.FindCallPattern(xorstr_("client.dll"), xorstr_("E8 ? ? ? ? 8B 0D ? ? ? ? FF 77 ? 8B 89")); // CLuaManager::RemoveVirtualMachine
+        if (callRemoveVirtualMachine)
+            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to RemoveVirtualMachine.\n"));
+        else
+            LogInFile(LOG_NAME, xorstr_("[WARN] Can`t find signature for RemoveVirtualMachine (pattern=example).\n"));
+    }
+
+    // Class: CLuaMain
+    // Method: CLuaMain::LoadScriptFromBuffer(const char* cpBuffer, unsigned int uiSize, const char* szFileName)
+    if (!callLoadScriptFromBufferInVm)
+    {
+        callLoadScriptFromBufferInVm = (ptrLoadScriptFromBufferInVm)scan.FindCallPattern(xorstr_("client.dll"), xorstr_("E8 ? ? ? ? 8B 8D ? ? ? ? 8B 41 ? ? ? 2B C1")); // CLuaMain::LoadScriptFromBuffer
+        if (callLoadScriptFromBufferInVm)
+            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to LoadScriptFromBufferInVm.\n"));
+        else
+            LogInFile(LOG_NAME, xorstr_("[WARN] Can`t find signature for LoadScriptFromBufferInVm (pattern=example).\n"));
+    }
+
+    // Note: CLuaMain::UnloadScript is inlined in this client build,
+    // so dedicated VM unload uses CLuaManager::RemoveVirtualMachine.
+
+    if (!callCreateVirtualMachine || !callRemoveVirtualMachine || !callLoadScriptFromBufferInVm)
+    {
+        LogInFile(LOG_NAME, xorstr_("[WARN] Lua thread VM bridge signatures are not fully configured.\n"));
     }
 }

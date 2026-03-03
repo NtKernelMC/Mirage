@@ -346,3 +346,37 @@ local ok = mirageFunc("removeDirectory", "C:/Mirage/TestDir", true)
 Документация: файл `LuaScripts/ImGuiAPI.txt`.
 Примечание 1: config ImGui (`imgui.ini`) сохраняется в `%LOCALAPPDATA%\\Temp\\Mirage\\imgui.ini`.
 Примечание 2: для табов всегда держите пары `beginTabBar/endTabBar` и `beginTabItem/endTabItem` в каждом кадре.
+
+40) luaThreadLoad(resourceName, code)
+Назначение: загружает Lua-код в отдельный VM thread Mirage.
+Аргументы: resourceName (строка), code (строка).
+Возврат: number (id потока) или false.
+Пример:
+local id = mirageFunc("luaThreadLoad", "ugta_tv", "outputChatBox('thread ok')")
+if id then
+    outputChatBox("Thread loaded: #" .. tostring(id))
+end
+Примечание: нужен настроенный VM bridge (сигнатуры Create/Remove/LoadScriptFromBuffer).
+
+41) luaThreadUnload(threadId)
+Назначение: выгружает ранее созданный Lua VM thread по id.
+Аргументы: threadId (number или string).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("luaThreadUnload", 1)
+Callback перед выгрузкой (внутри этого VM): сначала `__mirageThreadUnload()`, если нет - `onMirageThreadUnload()`.
+Сигнатура callback: без аргументов.
+
+42) luaThreadList()
+Назначение: возвращает список Lua thread'ов Mirage.
+Возврат: string (по строке на поток в формате `id|resource|loadedAt|state`).
+Пример:
+local list = mirageFunc("luaThreadList")
+outputChatBox(tostring(list))
+
+43) luaThreadSetBridge(createVM, removeVM, loadScriptFromBuffer)
+Назначение: вручную задает адреса функций VM bridge (hex/dec строки), если авто-сигнатуры не выставлены.
+Аргументы: createVM, removeVM, loadScriptFromBuffer (строки с адресами).
+Возврат: boolean.
+Пример:
+mirageFunc("luaThreadSetBridge", "0x5A1230", "0x5A1400", "0x59F8C0")

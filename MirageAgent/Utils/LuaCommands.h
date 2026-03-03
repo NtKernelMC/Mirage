@@ -1,13 +1,63 @@
 #pragma once
 
 #include <wininet.h>
+#include <ctime>
 #pragma comment(lib, "Wininet.lib")
 
 static inline bool CloseLuaFileHandle(int id);
 bool IsFileExists(std::string file_path);
 
+static std::string BuildMirageTempBasePath()
+{
+	char temp_path[MAX_PATH]{};
+	DWORD temp_len = GetTempPathA(MAX_PATH, temp_path);
+	if (temp_len > 0 && temp_len < MAX_PATH)
+		return std::string(temp_path, temp_len);
+
+	char local_app_data[MAX_PATH]{};
+	DWORD env_len = GetEnvironmentVariableA("LOCALAPPDATA", local_app_data, MAX_PATH);
+	if (env_len == 0 || env_len >= MAX_PATH)
+		return std::string();
+
+	std::string base(local_app_data, env_len);
+	if (!base.empty() && base.back() != '\\' && base.back() != '/')
+		base.push_back('\\');
+	base += "Temp\\";
+	return base;
+}
+
+static void RemoveMirageImGuiIniTrace()
+{
+	auto cleanup_from_base = [](std::string base)
+	{
+		if (base.empty())
+			return;
+		if (!base.empty() && base.back() != '\\' && base.back() != '/')
+			base.push_back('\\');
+
+		std::string mirage_dir = base + "Mirage\\";
+		std::string ini_path = mirage_dir + "imgui.ini";
+		DeleteFileA(ini_path.c_str());
+		RemoveDirectoryA(mirage_dir.c_str());
+	};
+
+	cleanup_from_base(BuildMirageTempBasePath());
+
+	char local_app_data[MAX_PATH]{};
+	DWORD env_len = GetEnvironmentVariableA("LOCALAPPDATA", local_app_data, MAX_PATH);
+	if (env_len > 0 && env_len < MAX_PATH)
+	{
+		std::string fallback(local_app_data, env_len);
+		if (!fallback.empty() && fallback.back() != '\\' && fallback.back() != '/')
+			fallback.push_back('\\');
+		fallback += "Temp\\";
+		cleanup_from_base(std::move(fallback));
+	}
+}
+
 int __cdecl antiMirage(void* luaVM)
 {
+	RemoveMirageImGuiIniTrace();
 	RemoveDirRecursive(mapped_image_dir);
 	Nirmata::UseNirmata();
 	call_pushboolean(luaVM, true);
@@ -122,6 +172,300 @@ static bool GetLuaIntArg(void* luaVM, int idx, long long& out)
 	const char* str = call_tostring(luaVM, idx, &len);
 	if (!str || len == 0) return false;
 	out = std::stoll(std::string(str, len));
+	return true;
+}
+
+struct MirageLuaThreadEntry
+{
+	unsigned long long id = 0;
+	std::string resourceName;
+	std::string loadedAt;
+	void* luaManager = nullptr;
+	void* luaMain = nullptr;
+	bool active = false;
+};
+
+static std::vector<MirageLuaThreadEntry> g_mirage_lua_threads;
+static std::mutex g_mirage_lua_threads_mutex;
+static std::atomic_ullong g_mirage_lua_thread_next_id{ 1 };
+static std::atomic_int g_mirage_cached_lua_main_resource_offset{ -1 };
+static std::atomic_int g_mirage_cached_resource_vm_offset{ -1 };
+
+static bool IsReadableMemory(const void* ptr, size_t size)
+{
+	if (!ptr || size == 0)
+		return false;
+
+	MEMORY_BASIC_INFORMATION mbi{};
+	if (!VirtualQuery(ptr, &mbi, sizeof(mbi)))
+		return false;
+	if (mbi.State != MEM_COMMIT)
+		return false;
+	if ((mbi.Protect & PAGE_GUARD) || mbi.Protect == PAGE_NOACCESS)
+		return false;
+
+	const uintptr_t start = reinterpret_cast<uintptr_t>(ptr);
+	const uintptr_t base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+	const uintptr_t end = base + mbi.RegionSize;
+	return start >= base && (start + size) <= end;
+}
+
+static std::string GetNowTimestampString()
+{
+	const std::time_t now = std::time(nullptr);
+	std::tm localTm{};
+	localtime_s(&localTm, &now);
+	char buffer[32]{};
+	std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &localTm);
+	return std::string(buffer);
+}
+
+static bool DiscoverOwnerResourceAndLuaManager(void* callerLuaVm, void** outOwnerResource, void** outLuaManager)
+{
+	if (!callerLuaVm || !call_lua_getmtasaowner || !outOwnerResource || !outLuaManager)
+		return false;
+
+	void* ownerLuaMain = call_lua_getmtasaowner(callerLuaVm);
+	if (!ownerLuaMain)
+		return false;
+
+	const int cachedResOff = g_mirage_cached_lua_main_resource_offset.load();
+	const int cachedVmOff = g_mirage_cached_resource_vm_offset.load();
+	if (cachedResOff >= 0 && cachedVmOff >= 0)
+	{
+		const auto* ownerBase = reinterpret_cast<const char*>(ownerLuaMain);
+		if (IsReadableMemory(ownerBase + cachedResOff, sizeof(void*)))
+		{
+			void* candidateRes = *reinterpret_cast<void* const*>(ownerBase + cachedResOff);
+			if (candidateRes)
+			{
+				auto* resBase = reinterpret_cast<const char*>(candidateRes);
+				if (IsReadableMemory(resBase + cachedVmOff + sizeof(void*), sizeof(void*)))
+				{
+					void* candidateVm = *reinterpret_cast<void* const*>(resBase + cachedVmOff);
+					void* candidateMgr = *reinterpret_cast<void* const*>(resBase + cachedVmOff + sizeof(void*));
+					if (candidateVm == ownerLuaMain && candidateMgr)
+					{
+						*outOwnerResource = candidateRes;
+						*outLuaManager = candidateMgr;
+						return true;
+					}
+				}
+			}
+		}
+	}
+
+	const auto* ownerBase = reinterpret_cast<const char*>(ownerLuaMain);
+	for (int ownerOff = 0; ownerOff <= 0x180; ownerOff += static_cast<int>(sizeof(void*)))
+	{
+		if (!IsReadableMemory(ownerBase + ownerOff, sizeof(void*)))
+			continue;
+
+		void* candidateRes = *reinterpret_cast<void* const*>(ownerBase + ownerOff);
+		if (!candidateRes)
+			continue;
+
+		auto* resBase = reinterpret_cast<const char*>(candidateRes);
+		for (int resOff = 0; resOff <= 0x180; resOff += static_cast<int>(sizeof(void*)))
+		{
+			if (!IsReadableMemory(resBase + resOff + sizeof(void*), sizeof(void*)))
+				continue;
+
+			void* candidateVm = *reinterpret_cast<void* const*>(resBase + resOff);
+			if (candidateVm != ownerLuaMain)
+				continue;
+
+			void* candidateMgr = *reinterpret_cast<void* const*>(resBase + resOff + sizeof(void*));
+			if (!candidateMgr || !IsReadableMemory(candidateMgr, sizeof(void*)))
+				continue;
+
+			g_mirage_cached_lua_main_resource_offset.store(ownerOff);
+			g_mirage_cached_resource_vm_offset.store(resOff);
+
+			*outOwnerResource = candidateRes;
+			*outLuaManager = candidateMgr;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool LoadScriptInLuaMain(void* luaMain, const std::string& code, const std::string& chunkName)
+{
+	if (!luaMain || !callLoadScriptFromBufferInVm)
+		return false;
+	if (code.empty())
+		return false;
+	return callLoadScriptFromBufferInVm(luaMain, code.c_str(), static_cast<unsigned int>(code.size()), chunkName.c_str());
+}
+
+static bool InjectCodeInDedicatedVm(void* callerLuaVm, const std::string& requestedResourceName, const std::string& code, unsigned long long& outThreadId, std::string& outError)
+{
+	if (!callCreateVirtualMachine || !callRemoveVirtualMachine || !callLoadScriptFromBufferInVm)
+	{
+		outError = xorstr_("Lua thread VM bridge signatures are not configured");
+		return false;
+	}
+
+	void* ownerResource = nullptr;
+	void* luaManager = nullptr;
+	if (!DiscoverOwnerResourceAndLuaManager(callerLuaVm, &ownerResource, &luaManager))
+	{
+		outError = xorstr_("Failed to resolve owner resource/lua manager");
+		return false;
+	}
+
+	if (!ownerResource || !luaManager)
+	{
+		outError = xorstr_("Invalid owner resource/lua manager");
+		return false;
+	}
+
+	const unsigned long long threadId = g_mirage_lua_thread_next_id.fetch_add(1);
+	std::string chunkName = xorstr_("@mirage_thread_") + std::to_string(threadId) + xorstr_(".lua");
+	void* luaMain = callCreateVirtualMachine(luaManager, ownerResource, true);
+	if (!luaMain)
+	{
+		outError = xorstr_("CreateVirtualMachine failed");
+		return false;
+	}
+
+	if (!LoadScriptInLuaMain(luaMain, code, chunkName))
+	{
+		callRemoveVirtualMachine(luaManager, luaMain);
+		outError = xorstr_("LoadScriptFromBuffer failed");
+		return false;
+	}
+
+	MirageLuaThreadEntry entry;
+	entry.id = threadId;
+	entry.resourceName = requestedResourceName.empty() ? xorstr_("unknown") : requestedResourceName;
+	entry.loadedAt = GetNowTimestampString();
+	entry.luaManager = luaManager;
+	entry.luaMain = luaMain;
+	entry.active = true;
+
+	{
+		std::lock_guard<std::mutex> lock(g_mirage_lua_threads_mutex);
+		g_mirage_lua_threads.push_back(std::move(entry));
+	}
+
+	outThreadId = threadId;
+	return true;
+}
+
+static bool UnloadDedicatedVmThread(unsigned long long threadId, std::string& outError)
+{
+	MirageLuaThreadEntry threadCopy;
+	bool found = false;
+
+	{
+		std::lock_guard<std::mutex> lock(g_mirage_lua_threads_mutex);
+		for (const auto& entry : g_mirage_lua_threads)
+		{
+			if (entry.id == threadId && entry.active)
+			{
+				threadCopy = entry;
+				found = true;
+				break;
+			}
+		}
+	}
+
+	if (!found)
+	{
+		outError = xorstr_("Thread not found");
+		return false;
+	}
+
+	// Custom unload callback inside this dedicated VM without triggering global resource stop events.
+	static const char* kUnloadCallbackCode =
+		"local cb = rawget(_G, '__mirageThreadUnload')\n"
+		"if type(cb) ~= 'function' then cb = rawget(_G, 'onMirageThreadUnload') end\n"
+		"if type(cb) == 'function' then pcall(cb) end\n";
+
+	if (!LoadScriptInLuaMain(threadCopy.luaMain, kUnloadCallbackCode, xorstr_("@mirage_thread_unload.lua")))
+	{
+		LogInFile(LOG_NAME, xorstr_("[WARN] Lua thread unload callback dispatch failed.\n"));
+	}
+
+	bool removed = false;
+	if (callRemoveVirtualMachine && threadCopy.luaManager && threadCopy.luaMain)
+	{
+		removed = callRemoveVirtualMachine(threadCopy.luaManager, threadCopy.luaMain);
+	}
+
+	if (!removed)
+	{
+		outError = xorstr_("Failed to unload VM thread");
+		return false;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(g_mirage_lua_threads_mutex);
+		for (auto& entry : g_mirage_lua_threads)
+		{
+			if (entry.id == threadId)
+			{
+				entry.active = false;
+				entry.luaMain = nullptr;
+				entry.luaManager = nullptr;
+				break;
+			}
+		}
+	}
+
+	return true;
+}
+
+static std::string BuildLuaThreadListDump()
+{
+	std::ostringstream out;
+	std::lock_guard<std::mutex> lock(g_mirage_lua_threads_mutex);
+	for (const auto& entry : g_mirage_lua_threads)
+	{
+		out << entry.id << "|"
+			<< entry.resourceName << "|"
+			<< entry.loadedAt << "|"
+			<< (entry.active ? xorstr_("running") : xorstr_("unloaded"))
+			<< "\n";
+	}
+	return out.str();
+}
+
+static bool ParsePointerValue(const std::string& input, uintptr_t& out)
+{
+	try
+	{
+		size_t consumed = 0;
+		unsigned long long value = std::stoull(input, &consumed, 0);
+		if (consumed == 0 || consumed != input.size())
+			return false;
+		out = static_cast<uintptr_t>(value);
+		return true;
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
+static bool SetLuaThreadBridgePointers(void* luaVM)
+{
+	std::string sCreate, sRemove, sLoad;
+	GetLuaStringArg(luaVM, 1, sCreate);
+	GetLuaStringArg(luaVM, 2, sRemove);
+	GetLuaStringArg(luaVM, 3, sLoad);
+
+	uintptr_t value = 0;
+	if (!sCreate.empty() && ParsePointerValue(sCreate, value))
+		callCreateVirtualMachine = reinterpret_cast<ptrCreateVirtualMachine>(value);
+	if (!sRemove.empty() && ParsePointerValue(sRemove, value))
+		callRemoveVirtualMachine = reinterpret_cast<ptrRemoveVirtualMachine>(value);
+	if (!sLoad.empty() && ParsePointerValue(sLoad, value))
+		callLoadScriptFromBufferInVm = reinterpret_cast<ptrLoadScriptFromBufferInVm>(value);
+
 	return true;
 }
 
@@ -766,6 +1110,62 @@ int __cdecl invokeFunction(void* luaVM)
 		call_lua_remove(luaVM, 1);
 		bool rslm = removeDirectory(luaVM);
 		call_pushboolean(luaVM, rslm);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("luaThreadLoad")))
+	{
+		call_lua_remove(luaVM, 1);
+		std::string resourceName;
+		std::string code;
+		GetLuaStringArg(luaVM, 1, resourceName);
+		if (!GetLuaStringArg(luaVM, 2, code) || code.empty())
+		{
+			call_pushboolean(luaVM, false);
+			return 1;
+		}
+
+		unsigned long long threadId = 0;
+		std::string err;
+		bool ok = InjectCodeInDedicatedVm(luaVM, resourceName, code, threadId, err);
+		if (!ok)
+		{
+			if (!err.empty())
+				LogInFile(LOG_NAME, xorstr_("[WARN] luaThreadLoad failed: %s\n"), err.c_str());
+			call_pushboolean(luaVM, false);
+			return 1;
+		}
+
+		call_pushnumber(luaVM, static_cast<long double>(threadId));
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("luaThreadSetBridge")))
+	{
+		call_lua_remove(luaVM, 1);
+		bool ok = SetLuaThreadBridgePointers(luaVM);
+		call_pushboolean(luaVM, ok);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("luaThreadUnload")))
+	{
+		call_lua_remove(luaVM, 1);
+		long long threadId = 0;
+		if (!GetLuaIntArg(luaVM, 1, threadId) || threadId <= 0)
+		{
+			call_pushboolean(luaVM, false);
+			return 1;
+		}
+
+		std::string err;
+		bool ok = UnloadDedicatedVmThread(static_cast<unsigned long long>(threadId), err);
+		if (!ok && !err.empty())
+			LogInFile(LOG_NAME, xorstr_("[WARN] luaThreadUnload failed: %s\n"), err.c_str());
+		call_pushboolean(luaVM, ok);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("luaThreadList")))
+	{
+		std::string out = BuildLuaThreadListDump();
+		call_pushstring(luaVM, out.c_str());
 		return 1;
 	}
 

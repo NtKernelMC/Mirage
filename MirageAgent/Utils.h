@@ -10,7 +10,7 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("V6.4") // Версия инжектора
+#define MIRAGE_VERSION xorstr_("V6.5") // Версия инжектора
 #define TO_ELEMENTID(x) ((ElementID) reinterpret_cast < unsigned long > (x) )
 #include <Windows.h>
 #include <stdio.h>
@@ -172,6 +172,22 @@ typedef int(__cdecl* lua_rawseti)(void* L, int a2, int a3);
 lua_rawseti call_rawseti = nullptr;
 typedef void* (__cdecl* lua_settop)(void* L, int a2);
 lua_settop call_settop = nullptr;
+typedef int(__cdecl* ptr_lua_gettop)(void* L);
+ptr_lua_gettop call_lua_gettop = nullptr;
+typedef int(__cdecl* ptr_lua_pcall)(void* L, int nargs, int nresults, int errfunc);
+ptr_lua_pcall call_lua_pcall = nullptr;
+typedef int(__cdecl* ptr_luaL_loadbuffer_raw)(void* L, const char* buff, size_t sz, const char* name);
+ptr_luaL_loadbuffer_raw call_luaL_loadbuffer_raw = nullptr;
+typedef void* (__cdecl* ptr_lua_getmtasaowner)(void* L);
+ptr_lua_getmtasaowner call_lua_getmtasaowner = nullptr;
+
+// Lua threads / VM bridge placeholders (MTA internals)
+typedef void* (__thiscall* ptrCreateVirtualMachine)(void* luaManager, void* resourceOwner, bool bEnableOOP);
+ptrCreateVirtualMachine callCreateVirtualMachine = nullptr;
+typedef bool(__thiscall* ptrRemoveVirtualMachine)(void* luaManager, void* luaMain);
+ptrRemoveVirtualMachine callRemoveVirtualMachine = nullptr;
+typedef bool(__thiscall* ptrLoadScriptFromBufferInVm)(void* luaMain, const char* cpBuffer, unsigned int uiSize, const char* szFileName);
+ptrLoadScriptFromBufferInVm callLoadScriptFromBufferInVm = nullptr;
 int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name);
 
 BYTE loadlib_prologue[5] = { 0x0 };
