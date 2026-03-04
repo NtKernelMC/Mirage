@@ -443,12 +443,6 @@ local function isMirageResource(sourceResource)
     return false
 end
 
-local function GetPedVoiceGuard(sourceResource, functionName, isAllowedByACL, luaFilename, luaLineNumber, ...)
-    if sourceResource and getResourceName(sourceResource) == selfResource then return end
-    if isMirageResource(sourceResource) then return end
-    mirageFunc("getPedVoice", ...)
-end
-
 local function replaceResourceIdentifier(s)
     s = s:gsub("elem:resource%x%x%x%x%x%x%x%x", "root")
     s = s:gsub("elem:root%x%x%x%x%x%x%x%x", "root")
@@ -833,7 +827,6 @@ if isDebugViewActive then
 end
 
 mirageFunc("hideFunctionCall", true)
-mirageFunc("setDbgHook", "preFunction", GetPedVoiceGuard, { "getPedVoice" })
 mirageFunc("setDbgHook", "preFunction", evDumper, { "triggerServerEvent", "triggerLatentServerEvent" })
 mirageFunc("hideFunctionCall", false)
 
