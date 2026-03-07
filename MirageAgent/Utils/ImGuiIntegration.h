@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
-#include <cfloat>
 
 #pragma comment(lib, "d3d9.lib")
 #pragma comment(lib, "d3dx9.lib")
@@ -403,10 +402,6 @@ static void** get_function_slot(int vtable_index)
 
 static std::string ImGuiLuaToUtf8(std::string input)
 {
-    if (input.empty())
-        return input;
-    if (!IsUtf8(input))
-        input = cp1251_to_utf8(input.c_str());
     return input;
 }
 

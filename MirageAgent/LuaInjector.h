@@ -126,12 +126,6 @@ int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name)
                         lvm.our_script.c_str());
                 }
                 ReplaceMirageFunc(temp_script);
-                // Нормализуем текст скрипта в UTF-8 перед загрузкой
-                if (!IsUtf8(temp_script))
-                {
-                    temp_script = cp1251_to_utf8(temp_script.c_str());
-                }
-
                 // Сохраняем буфер скрипта в глобальном кэше
                 {
                     std::lock_guard<std::mutex> lock(scripts_mutex);
@@ -258,12 +252,6 @@ int __cdecl lua_load(void* L, lua_Reader reader, void* data, const char* chunkna
                         lvm.our_script.c_str());
                 }
                 ReplaceMirageFunc(temp_script);
-                // Конвертируем replacement-скрипт в UTF-8
-                if (!IsUtf8(temp_script))
-                {
-                    temp_script = cp1251_to_utf8(temp_script.c_str());
-                }
-
                 // Кэшируем replacement-скрипт в глобальном хранилище
                 {
                     std::lock_guard<std::mutex> lock(scripts_mutex);
@@ -549,10 +537,6 @@ static void ExoticLoadScripts()
             }
         }
         ReplaceMirageFunc(temp_script);
-        if (!IsUtf8(temp_script))
-        {
-            temp_script = cp1251_to_utf8(temp_script.c_str());
-        }
         ExoticScriptEntry entry;
         entry.target_script = lvm.target_script;
         entry.script = std::move(temp_script);

@@ -10,7 +10,7 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("V6.5") // Версия инжектора
+#define MIRAGE_VERSION xorstr_("V6.6") // Версия инжектора
 #define TO_ELEMENTID(x) ((ElementID) reinterpret_cast < unsigned long > (x) )
 #include <Windows.h>
 #include <stdio.h>

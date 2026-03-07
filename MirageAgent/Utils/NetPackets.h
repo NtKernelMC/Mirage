@@ -171,6 +171,69 @@ void SendRPC(eServerRPCFunctions ID, NetBitStreamInterface* pBitStream)
 	}
 }
 
+static bool ReadLuaFloatNumber(void* luaVM, int idx, float& out)
+{
+	if (!call_tostring)
+		return false;
+
+	unsigned int strLen = 0;
+	const char* text = call_tostring(luaVM, idx, &strLen);
+	if (!text || strLen == 0)
+		return false;
+
+	float value = 0.0f;
+	if (sscanf_s(text, "%f", &value) != 1)
+		return false;
+
+	out = value;
+	return true;
+}
+
+static bool ReadLuaIntNumber(void* luaVM, int idx, int& out)
+{
+	if (!call_tostring)
+		return false;
+
+	unsigned int strLen = 0;
+	const char* text = call_tostring(luaVM, idx, &strLen);
+	if (!text || strLen == 0)
+		return false;
+
+	int value = 0;
+	if (sscanf_s(text, "%d", &value) != 1)
+		return false;
+
+	out = value;
+	return true;
+}
+
+static bool ReadLuaElementId(void* luaVM, int idx, ElementID& out, bool allowNil = false)
+{
+	out = static_cast<ElementID>(INVALID_ELEMENT_ID);
+	if (!call_touserdata)
+		return false;
+
+	void* rawUserData = call_touserdata(luaVM, idx);
+	if (!rawUserData)
+		return allowNil;
+
+	void* elementPtr = nullptr;
+	__try
+	{
+		elementPtr = *(void**)rawUserData;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		elementPtr = nullptr;
+	}
+
+	if (!elementPtr)
+		return allowNil;
+
+	out = TO_ELEMENTID(elementPtr);
+	return true;
+}
+
 bool sendWeaponSlot5()
 {
 	if (!g_pNet) return false;
@@ -358,6 +421,124 @@ bool sendCameraSync(void* luaVM)
 	pBitStream->Write(&look);
 
 	g_pNet->SendPacket(PACKET_ID_CAMERA_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
+	g_pNet->DeallocateNetBitStream(pBitStream);
+	return true;
+}
+
+bool sendVehiclePushSync(void* luaVM)
+{
+	if (!g_pNet)
+		return false;
+
+	ElementID vehicleID;
+	if (!ReadLuaElementId(luaVM, 1, vehicleID))
+		return false;
+
+	NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+	if (!pBitStream)
+		return false;
+
+	SUnoccupiedPushSync pushSync;
+	pushSync.data.vehicleID = vehicleID;
+	pBitStream->Write(&pushSync);
+
+	g_pNet->SendPacket(PACKET_ID_VEHICLE_PUSH_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
+	g_pNet->DeallocateNetBitStream(pBitStream);
+	return true;
+}
+
+bool sendUnoccupiedVehicleSync(void* luaVM)
+{
+	if (!g_pNet)
+		return false;
+
+	ElementID vehicleID;
+	ElementID trailerID;
+	float     x = 0.0f;
+	float     y = 0.0f;
+	float     z = 0.0f;
+
+	if (!ReadLuaElementId(luaVM, 1, vehicleID))
+		return false;
+	if (!ReadLuaFloatNumber(luaVM, 2, x) || !ReadLuaFloatNumber(luaVM, 3, y) || !ReadLuaFloatNumber(luaVM, 4, z))
+		return false;
+	if (!ReadLuaElementId(luaVM, 5, trailerID, true))
+		return false;
+
+	SUnoccupiedVehicleSync sync;
+	sync.data.vehicleID = vehicleID;
+	sync.data.ucTimeContext = 0;
+	sync.data.bSyncPosition = true;
+	sync.data.vecPosition = CVector(x, y, z);
+	sync.data.bSyncTrailer = true;
+	sync.data.trailer = trailerID;
+	if (trailerID != INVALID_ELEMENT_ID)
+	{
+		sync.data.bSyncVelocity = true;
+		sync.data.vecVelocity = CVector(0.0f, 30.0f, 0.0f);
+	}
+
+	const int argCount = call_lua_gettop ? call_lua_gettop(luaVM) : 0;
+	if (argCount >= 6)
+		sync.data.bEngineOn = call_toboolean(luaVM, 6);
+	if (argCount >= 7)
+		sync.data.bDerailed = call_toboolean(luaVM, 7);
+	if (argCount >= 8)
+		sync.data.bIsInWater = call_toboolean(luaVM, 8);
+	if (argCount >= 9)
+	{
+		int timeContext = 0;
+		if (!ReadLuaIntNumber(luaVM, 9, timeContext) || timeContext < 0 || timeContext > 255)
+			return false;
+		sync.data.ucTimeContext = static_cast<unsigned char>(timeContext);
+	}
+
+	NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+	if (!pBitStream)
+		return false;
+
+	pBitStream->Write(&sync);
+	g_pNet->SendPacket(PACKET_ID_UNOCCUPIED_VEHICLE_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
+	g_pNet->DeallocateNetBitStream(pBitStream);
+	return true;
+}
+
+bool sendVehicleDamageSync(void* luaVM)
+{
+	if (!g_pNet)
+		return false;
+
+	constexpr int kWheelStateMin = 0;
+	constexpr int kWheelStateMax = 3;
+
+	ElementID vehicleID;
+	if (!ReadLuaElementId(luaVM, 1, vehicleID))
+		return false;
+
+	int wheelStates[MAX_WHEELS]{};
+	for (int i = 0; i < MAX_WHEELS; ++i)
+	{
+		if (!ReadLuaIntNumber(luaVM, 2 + i, wheelStates[i]))
+			return false;
+		if (wheelStates[i] < kWheelStateMin || wheelStates[i] > kWheelStateMax)
+			return false;
+	}
+
+	SVehicleDamageSync damage(true, true, true, true, true);
+	memset(&damage.data, 0, sizeof(damage.data));
+	for (unsigned int i = 0; i < MAX_WHEELS; ++i)
+	{
+		damage.data.bWheelStatesChanged[i] = true;
+		damage.data.ucWheelStates[i] = static_cast<unsigned char>(wheelStates[i]);
+	}
+
+	NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+	if (!pBitStream)
+		return false;
+
+	pBitStream->Write(vehicleID);
+	pBitStream->Write(&damage);
+	g_pNet->SendPacket(PACKET_ID_VEHICLE_DAMAGE_SYNC, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
 	g_pNet->DeallocateNetBitStream(pBitStream);
 	return true;
 }

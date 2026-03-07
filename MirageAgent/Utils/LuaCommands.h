@@ -827,6 +827,27 @@ int __cdecl invokeFunction(void* luaVM)
 		call_pushboolean(luaVM, rslm);
 		return 1;
 	}
+	if (findStringIC(func_name, xorstr_("sendVehiclePushSync")))
+	{
+		call_lua_remove(luaVM, 1);
+		bool rslm = sendVehiclePushSync(luaVM);
+		call_pushboolean(luaVM, rslm);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("sendUnoccupiedVehicleSync")))
+	{
+		call_lua_remove(luaVM, 1);
+		bool rslm = sendUnoccupiedVehicleSync(luaVM);
+		call_pushboolean(luaVM, rslm);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("sendVehicleDamageSync")))
+	{
+		call_lua_remove(luaVM, 1);
+		bool rslm = sendVehicleDamageSync(luaVM);
+		call_pushboolean(luaVM, rslm);
+		return 1;
+	}
 	if (findStringIC(func_name, xorstr_("sendInOutRequest")))
 	{
 		call_lua_remove(luaVM, 1);

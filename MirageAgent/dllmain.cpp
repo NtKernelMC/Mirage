@@ -5,6 +5,7 @@
 #include "AnticheatBypass.h"
 #include "Signatures.h"
 #include "ScriptConfig.h"
+#include "CrashHandler.h"
 
 extern "C" __declspec(dllexport) int NextHook(int code, WPARAM wParam, LPARAM lParam)
 {
@@ -20,6 +21,7 @@ void AsyncThread()
     MH_STATUS mhStatus = MH_Initialize();
     if (mhStatus != MH_OK)
         LogInFile(LOG_NAME, xorstr_("[ERROR] MH_Initialize failed: %d\n"), mhStatus);
+    CrashHandler::Install();
     
     // Хуй найдут пидоры
     CEasyRegistry* reg = new CEasyRegistry(HKEY_LOCAL_MACHINE, xorstr_(L"SOFTWARE\\WOW6432Node\\MicrosoftUpdate_8246G"), false);
@@ -114,6 +116,7 @@ int __stdcall DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         AsyncBitch();
         break;
     case DLL_PROCESS_DETACH:
+        CrashHandler::Shutdown();
         ShutdownImGuiHooking();
         break;
     }

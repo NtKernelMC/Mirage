@@ -380,3 +380,46 @@ outputChatBox(tostring(list))
 Возврат: boolean.
 Пример:
 mirageFunc("luaThreadSetBridge", "0x5A1230", "0x5A1400", "0x59F8C0")
+
+44) sendVehiclePushSync(vehicle)
+Назначение: отправляет пакет `PACKET_ID_VEHICLE_PUSH_SYNC`.
+Аргументы: vehicle (элемент транспорта MTA; userdata).
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("sendVehiclePushSync", someVehicle)
+if ok then
+    outputChatBox("VehiclePushSync отправлен")
+end
+
+45) sendUnoccupiedVehicleSync(vehicle, x, y, z, trailer[, engineOn, derailed, isInWater, timeContext])
+Назначение: отправляет пакет `PACKET_ID_UNOCCUPIED_VEHICLE_SYNC` с позицией транспорта и трейлером.
+Аргументы:
+- vehicle (элемент транспорта MTA; userdata)
+- x, y, z (числа)
+- trailer (элемент трейлера или `nil` для detach)
+- engineOn, derailed, isInWater (optional boolean; по умолчанию `false`)
+- timeContext (optional number 0..255; по умолчанию `0`)
+Примечание: если `trailer` передан как валидный элемент, функция дополнительно включает sync velocity и отправляет скорость `0, 30, 0`.
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("sendUnoccupiedVehicleSync", someVehicle, 100.0, 200.0, 10.0, someTrailer, true, false, false, 0)
+if ok then
+    outputChatBox("UnoccupiedVehicleSync отправлен")
+end
+
+46) sendVehicleDamageSync(vehicle, frontLeft, rearLeft, frontRight, rearRight)
+Назначение: отправляет пакет `PACKET_ID_VEHICLE_DAMAGE_SYNC` для состояний колес.
+Аргументы:
+- vehicle (элемент транспорта MTA; userdata)
+- frontLeft, rearLeft, frontRight, rearRight (числа 0..3)
+Состояния колес:
+- `0` = intact
+- `1` = burst
+- `2` = missing
+- `3` = intact_collisionless
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("sendVehicleDamageSync", someVehicle, 1, 1, 0, 0)
+if ok then
+    outputChatBox("VehicleDamageSync отправлен")
+end
