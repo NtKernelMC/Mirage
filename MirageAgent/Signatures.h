@@ -220,6 +220,7 @@ static std::vector<std::string> vecHooks =
     xorstr_("addEventHandler"),
     xorstr_("loadstring"),
     xorstr_("load"),
+    xorstr_("setCameraTarget"),
     xorstr_("setPlayerNametagText"),
     xorstr_("setElementData"),
     xorstr_("blowVehicle")

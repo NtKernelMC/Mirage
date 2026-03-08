@@ -29,6 +29,18 @@ struct MANUAL_MAPPING_DATA
 	BOOL SEHSupport;
 };
 
+constexpr DWORD MIRAGE_MMAP_CONTEXT_MAGIC = 0x47524D4Du;
+constexpr DWORD MIRAGE_MMAP_CONTEXT_VERSION = 1u;
+
+struct MIRAGE_MMAP_CONTEXT
+{
+	DWORD magic;
+	DWORD version;
+	ULONG_PTR imageBase;
+	DWORD imageSize;
+	ULONG_PTR originalReserved;
+};
+
 
 //Note: Exception support only x64 with build params /EHa or /EHc
 bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeader = true, bool ClearNonNeededSections = true, bool AdjustProtections = true, bool SEHExceptionSupport = true, DWORD fdwReason = DLL_PROCESS_ATTACH, LPVOID lpReserved = 0);

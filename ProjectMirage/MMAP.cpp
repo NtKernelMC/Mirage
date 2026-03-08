@@ -12,11 +12,14 @@
 #define CURRENT_ARCH IMAGE_FILE_MACHINE_I386
 #endif
 
-bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeader, bool ClearNonNeededSections, bool AdjustProtections, bool SEHExceptionSupport, DWORD fdwReason, LPVOID lpReserved) {
+bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeader, bool ClearNonNeededSections, bool AdjustProtections, bool SEHExceptionSupport, DWORD fdwReason, LPVOID lpReserved)
+{
 	IMAGE_NT_HEADERS* pOldNtHeader = nullptr;
 	IMAGE_OPTIONAL_HEADER* pOldOptHeader = nullptr;
 	IMAGE_FILE_HEADER* pOldFileHeader = nullptr;
 	BYTE* pTargetBase = nullptr;
+	BYTE* pMirageContextAlloc = nullptr;
+	LPVOID pEffectiveReserved = lpReserved;
 
 	if (reinterpret_cast<IMAGE_DOS_HEADER*>(pSrcData)->e_magic != 0x5A4D)
 		return false;
@@ -51,13 +54,44 @@ bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeade
 #endif
 	data.pbase = pTargetBase;
 	data.fdwReasonParam = fdwReason;
-	data.reservedParam = lpReserved;
 	data.SEHSupport = SEHExceptionSupport;
+
+	if (fdwReason == DLL_PROCESS_ATTACH)
+	{
+		MIRAGE_MMAP_CONTEXT mirageContext{};
+		mirageContext.magic = MIRAGE_MMAP_CONTEXT_MAGIC;
+		mirageContext.version = MIRAGE_MMAP_CONTEXT_VERSION;
+		mirageContext.imageBase = reinterpret_cast<ULONG_PTR>(pTargetBase);
+		mirageContext.imageSize = pOldOptHeader->SizeOfImage;
+		mirageContext.originalReserved = reinterpret_cast<ULONG_PTR>(lpReserved);
+
+		pMirageContextAlloc = reinterpret_cast<BYTE*>(VirtualAllocEx(hProc, nullptr, sizeof(MIRAGE_MMAP_CONTEXT), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+		if (!pMirageContextAlloc)
+		{
+			printf("Error: can`t allocate mirage context: %d\n", GetLastError());
+			VirtualFreeEx(hProc, pTargetBase, 0, MEM_RELEASE);
+			return false;
+		}
+
+		if (!WriteProcessMemory(hProc, pMirageContextAlloc, &mirageContext, sizeof(mirageContext), nullptr))
+		{
+			printf("Error: can`t write mirage context: %d\n", GetLastError());
+			VirtualFreeEx(hProc, pMirageContextAlloc, 0, MEM_RELEASE);
+			VirtualFreeEx(hProc, pTargetBase, 0, MEM_RELEASE);
+			return false;
+		}
+
+		pEffectiveReserved = pMirageContextAlloc;
+	}
+
+	data.reservedParam = pEffectiveReserved;
 
 
 	//File header
 	if (!WriteProcessMemory(hProc, pTargetBase, pSrcData, 0x1000, nullptr)) { //only first 0x1000 bytes for the header
 		printf("Error: can`t write process memory: %d\n", GetLastError());
+		if (pMirageContextAlloc)
+			VirtualFreeEx(hProc, pMirageContextAlloc, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, pTargetBase, 0, MEM_RELEASE);
 		return false;
 	}
@@ -66,6 +100,8 @@ bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeade
 	for (UINT i = 0; i != pOldFileHeader->NumberOfSections; ++i, ++pSectionHeader) {
 		if (pSectionHeader->SizeOfRawData) {
 			if (!WriteProcessMemory(hProc, pTargetBase + pSectionHeader->VirtualAddress, pSrcData + pSectionHeader->PointerToRawData, pSectionHeader->SizeOfRawData, nullptr)) {
+				if (pMirageContextAlloc)
+					VirtualFreeEx(hProc, pMirageContextAlloc, 0, MEM_RELEASE);
 				VirtualFreeEx(hProc, pTargetBase, 0, MEM_RELEASE);
 				return false;
 			}
@@ -75,11 +111,15 @@ bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeade
 	//Mapping params
 	BYTE* MappingDataAlloc = reinterpret_cast<BYTE*>(VirtualAllocEx(hProc, nullptr, sizeof(MANUAL_MAPPING_DATA), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
 	if (!MappingDataAlloc) {
+		if (pMirageContextAlloc)
+			VirtualFreeEx(hProc, pMirageContextAlloc, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, pTargetBase, 0, MEM_RELEASE);
 		return false;
 	}
 
 	if (!WriteProcessMemory(hProc, MappingDataAlloc, &data, sizeof(MANUAL_MAPPING_DATA), nullptr)) {
+		if (pMirageContextAlloc)
+			VirtualFreeEx(hProc, pMirageContextAlloc, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, pTargetBase, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, MappingDataAlloc, 0, MEM_RELEASE);
 		return false;
@@ -88,12 +128,16 @@ bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeade
 	//Shell code
 	void* pShellcode = VirtualAllocEx(hProc, nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 	if (!pShellcode) {
+		if (pMirageContextAlloc)
+			VirtualFreeEx(hProc, pMirageContextAlloc, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, pTargetBase, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, MappingDataAlloc, 0, MEM_RELEASE);
 		return false;
 	}
 
 	if (!WriteProcessMemory(hProc, pShellcode, Shellcode, 0x1000, nullptr)) {
+		if (pMirageContextAlloc)
+			VirtualFreeEx(hProc, pMirageContextAlloc, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, pTargetBase, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, MappingDataAlloc, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, pShellcode, 0, MEM_RELEASE);
@@ -102,6 +146,8 @@ bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeade
 
 	HANDLE hThread = CreateRemoteThread(hProc, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(pShellcode), MappingDataAlloc, 0, nullptr);
 	if (!hThread) {
+		if (pMirageContextAlloc)
+			VirtualFreeEx(hProc, pMirageContextAlloc, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, pTargetBase, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, MappingDataAlloc, 0, MEM_RELEASE);
 		VirtualFreeEx(hProc, pShellcode, 0, MEM_RELEASE);
@@ -129,6 +175,8 @@ bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeade
 			VirtualFreeEx(hProc, pTargetBase, 0, MEM_RELEASE);
 			VirtualFreeEx(hProc, MappingDataAlloc, 0, MEM_RELEASE);
 			VirtualFreeEx(hProc, pShellcode, 0, MEM_RELEASE);
+			if (pMirageContextAlloc)
+				VirtualFreeEx(hProc, pMirageContextAlloc, 0, MEM_RELEASE);
 			return false;
 		}
 		else if (hCheck == (HINSTANCE)0x505050) {
@@ -198,6 +246,9 @@ bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeade
 	}
 	if (!VirtualFreeEx(hProc, MappingDataAlloc, 0, MEM_RELEASE)) {
 		ILog("WARNING: can't release mapping data memory\n");
+	}
+	if (pMirageContextAlloc && !VirtualFreeEx(hProc, pMirageContextAlloc, 0, MEM_RELEASE)) {
+		ILog("WARNING: can't release mirage context memory\n");
 	}
 
 	return true;

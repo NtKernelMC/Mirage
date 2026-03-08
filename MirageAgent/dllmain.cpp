@@ -7,6 +7,8 @@
 #include "ScriptConfig.h"
 #include "CrashHandler.h"
 
+#include <cstdint>
+
 extern "C" __declspec(dllexport) int NextHook(int code, WPARAM wParam, LPARAM lParam)
 {
     return CallNextHookEx(NULL, code, wParam, lParam);
@@ -15,6 +17,59 @@ extern "C" __declspec(dllexport) int NextHook(int code, WPARAM wParam, LPARAM lP
 typedef void(__stdcall* ptrExitProcess)(UINT uExitCode);
 ptrExitProcess callExitProcess = nullptr;
 void __stdcall hkExitProcess(UINT uExitCode) {}
+
+constexpr DWORD MIRAGE_MMAP_CONTEXT_MAGIC = 0x47524D4Du;
+constexpr DWORD MIRAGE_MMAP_CONTEXT_VERSION = 1u;
+
+struct MIRAGE_MMAP_CONTEXT
+{
+    DWORD magic;
+    DWORD version;
+    ULONG_PTR imageBase;
+    DWORD imageSize;
+    ULONG_PTR originalReserved;
+};
+
+static uint32_t GetModuleImageSize(HMODULE hModule)
+{
+    if (!hModule)
+        return 0;
+
+    auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(hModule);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return 0;
+
+    auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<const BYTE*>(hModule) + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return 0;
+
+    return nt->OptionalHeader.SizeOfImage;
+}
+
+static void ApplyMirageImageInfo(HMODULE hModule, LPVOID lpReserved)
+{
+    uintptr_t imageBase = reinterpret_cast<uintptr_t>(hModule);
+    uint32_t imageSize = GetModuleImageSize(hModule);
+
+    __try
+    {
+        if (lpReserved)
+        {
+            auto* ctx = reinterpret_cast<const MIRAGE_MMAP_CONTEXT*>(lpReserved);
+            if (ctx->magic == MIRAGE_MMAP_CONTEXT_MAGIC && ctx->version == MIRAGE_MMAP_CONTEXT_VERSION)
+            {
+                imageBase = static_cast<uintptr_t>(ctx->imageBase);
+                imageSize = ctx->imageSize ? ctx->imageSize : imageSize;
+            }
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+
+    CrashHandler::SetMirageImageInfo(imageBase, imageSize);
+}
+
 void AsyncThread()
 {
     //DROID_VM_START();
@@ -113,6 +168,7 @@ int __stdcall DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     switch (ul_reason_for_call)
     {
     case DLL_PROCESS_ATTACH:
+        ApplyMirageImageInfo(hModule, lpReserved);
         AsyncBitch();
         break;
     case DLL_PROCESS_DETACH:

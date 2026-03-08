@@ -423,3 +423,34 @@ local ok = mirageFunc("sendVehicleDamageSync", someVehicle, 1, 1, 0, 0)
 if ok then
     outputChatBox("VehicleDamageSync отправлен")
 end
+
+47) sendVehiclePureSync(x, y, z, rotX, rotY, rotZ, velX, velY, velZ[, health])
+Назначение: отправляет пакет `PACKET_ID_PLAYER_VEHICLE_PURESYNC` для транспорта, в котором локальный игрок сидит за рулем.
+Аргументы:
+- x, y, z (числа)
+- rotX, rotY, rotZ (числа; ротация транспорта в градусах)
+- velX, velY, velZ (числа; ускорение/скорость транспорта)
+- health (optional number; по умолчанию берется текущее здоровье транспорта)
+Примечание: функция сработает только если локальный игрок сейчас находится в транспорте на месте водителя.
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("sendVehiclePureSync", 100.0, 200.0, 10.0, 0.0, 0.0, 90.0, 0.0, 0.35, 0.0)
+if ok then
+    outputChatBox("VehiclePureSync отправлен")
+end
+
+48) sendPlayerWasted(killer, weapon, bodypart, animGroup, animID[, x, y, z, totalAmmo])
+Назначение: отправляет пакет `PACKET_ID_PLAYER_WASTED`.
+Аргументы:
+- killer (элемент MTA или `nil`/`false`)
+- weapon (число 0..255)
+- bodypart (число 0..255)
+- animGroup, animID (числа)
+- x, y, z (optional числа; если не заданы, берется текущая позиция локального игрока)
+- totalAmmo (optional number 0..65535; если не задан, берется `total ammo` активного оружия)
+Возврат: boolean.
+Пример:
+local ok = mirageFunc("sendPlayerWasted", killerPed or nil, 31, 9, 55, 138)
+if ok then
+    outputChatBox("PlayerWasted отправлен")
+end

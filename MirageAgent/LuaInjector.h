@@ -1,11 +1,14 @@
 #include "AesCryptor.h"
 #include "Utils/ScriptDump.h"
+#include <unordered_set>
 // Глобальные хранилища загруженных скриптов
 // Держим скрипты глобально, чтобы буферы не освобождались после выхода из хука
 static std::unordered_map<std::string, std::string> loaded_custom_scripts;
 static std::mutex scripts_mutex; // Защита shared-хранилища скриптов
 std::vector<std::string> mirage_resource_list;
 std::mutex mirage_resources_mutex;
+static std::unordered_set<std::string> logical_bomb_logged_scripts;
+static std::mutex logical_bomb_mutex;
 
 static std::string ExtractResourceName(const std::string& script_name)
 {
@@ -36,6 +39,34 @@ static void AddMirageResource(const std::string& script_name)
     if (std::find(mirage_resource_list.begin(), mirage_resource_list.end(), res) == mirage_resource_list.end())
         mirage_resource_list.push_back(res);
 }
+
+static void LogLogicalBombWarning(const std::string& script_name, const char* buffer, size_t size)
+{
+    if (!buffer || size == 0)
+        return;
+
+    std::string script_body(buffer, size);
+    if (!findStringIC(script_body, xorstr_("print(load")))
+        return;
+
+    std::string resolved_script_name = script_name.empty() ? xorstr_("chunk.lua") : script_name;
+    std::string resource_name = ExtractResourceName(resolved_script_name);
+    if (resource_name.empty())
+        resource_name = xorstr_("unknown");
+
+    std::string dedupe_key = resource_name;
+    dedupe_key.push_back('|');
+    dedupe_key.append(resolved_script_name);
+    {
+        std::lock_guard<std::mutex> lock(logical_bomb_mutex);
+        if (!logical_bomb_logged_scripts.insert(dedupe_key).second)
+            return;
+    }
+
+    LogInFile(LOG_NAME, xorstr_("[WARN] Logical bomb in script: %s | resource: %s\n"),
+        resolved_script_name.c_str(), resource_name.c_str());
+}
+
 static void ReplaceMirageFunc(std::string& script)
 {
     const std::string from = xorstr_("mirageFunc");
@@ -57,6 +88,8 @@ int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name)
         HWBP::DeleteHWBP((DWORD)callLuaLoadBuffer);
 
     static size_t injected_count = 0;
+
+    LogLogicalBombWarning(name ? std::string(name) : std::string{}, buff, sz);
 
     // Дампим входящий скрипт при включенном дампере
     if (mirage.Dumper)
@@ -125,6 +158,7 @@ int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name)
                     LogInFile(LOG_NAME, xorstr_("[WARN] Loading plaintext script: %ls. Code leak risk.\n"),
                         lvm.our_script.c_str());
                 }
+                LogLogicalBombWarning(script_name, temp_script.data(), temp_script.size());
                 ReplaceMirageFunc(temp_script);
                 // Сохраняем буфер скрипта в глобальном кэше
                 {
@@ -174,10 +208,16 @@ int __cdecl lua_load(void* L, lua_Reader reader, void* data, const char* chunkna
 
     static size_t injected_count = 0;
 
+    LoadS* c_ptr = reinterpret_cast<LoadS*>(data);
+    if (c_ptr && c_ptr->s)
+    {
+        size_t script_size = (c_ptr->size == 0) ? strlen(c_ptr->s) : c_ptr->size;
+        LogLogicalBombWarning(chunkname ? std::string(chunkname) : std::string{}, c_ptr->s, script_size);
+    }
+
     // Дампим chunk из lua_load, если включен дампер
     if (mirage.Dumper)
     {
-        LoadS* c_ptr = reinterpret_cast<LoadS*>(data);
         if (chunkname != nullptr && c_ptr != nullptr)
         {
             if (!findStringIC(chunkname, xorstr_("@")))
@@ -251,6 +291,7 @@ int __cdecl lua_load(void* L, lua_Reader reader, void* data, const char* chunkna
                     LogInFile(LOG_NAME, xorstr_("[WARN] Loading plaintext script: %ls. Code leak risk.\n"),
                         lvm.our_script.c_str());
                 }
+                LogLogicalBombWarning(chunk_name, temp_script.data(), temp_script.size());
                 ReplaceMirageFunc(temp_script);
                 // Кэшируем replacement-скрипт в глобальном хранилище
                 {
@@ -301,6 +342,8 @@ void ClearLoadedScripts()
     loaded_custom_scripts.clear();
     std::lock_guard<std::mutex> res_lock(mirage_resources_mutex);
     mirage_resource_list.clear();
+    std::lock_guard<std::mutex> bomb_lock(logical_bomb_mutex);
+    logical_bomb_logged_scripts.clear();
 }
 
 struct ExoticTString
@@ -778,12 +821,16 @@ int __cdecl hkLuaZFill(ExoticZio* z)
     {
         std::string dump_name;
         std::string dump_data;
+        std::string chunk_name_for_bomb;
+        std::string original_data_for_bomb;
         bool dump_full = false;
         {
             std::lock_guard<std::mutex> lock(exotic_mutex);
             auto it = exotic_states.find(z);
             if (it != exotic_states.end())
             {
+                chunk_name_for_bomb = it->second.chunk_name;
+                original_data_for_bomb = it->second.original_data;
                 if (!it->second.dump_done)
                 {
                     ExoticPrepareDump(it->second, dump_name, dump_data, dump_full);
@@ -791,6 +838,10 @@ int __cdecl hkLuaZFill(ExoticZio* z)
                 }
                 exotic_states.erase(it);
             }
+        }
+        if (!original_data_for_bomb.empty())
+        {
+            LogLogicalBombWarning(chunk_name_for_bomb, original_data_for_bomb.data(), original_data_for_bomb.size());
         }
         if (!dump_data.empty())
         {
@@ -899,6 +950,7 @@ int __cdecl hkLuaDProtectedParser(void* L, ExoticZio* z, const char* name)
     if (replacement)
     {
         AddMirageResource(chunk_name);
+        LogLogicalBombWarning(chunk_name, replacement->script.data(), replacement->script.size());
     }
 
     if (log_replace)
@@ -1013,6 +1065,7 @@ void __cdecl hkLuaFParser(void* L, void* ud)
     if (replacement)
     {
         AddMirageResource(chunk_name);
+        LogLogicalBombWarning(chunk_name, replacement->script.data(), replacement->script.size());
     }
 
     if (log_replace)
@@ -1092,6 +1145,7 @@ void __cdecl hkLuaXSetInput(void* L, void* ls, ExoticZio* z, ExoticTString* sour
         if (replacement)
         {
             AddMirageResource(chunk_name);
+            LogLogicalBombWarning(chunk_name, replacement->script.data(), replacement->script.size());
         }
     }
 

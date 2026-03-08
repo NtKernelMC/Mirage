@@ -234,6 +234,177 @@ static bool ReadLuaElementId(void* luaVM, int idx, ElementID& out, bool allowNil
 	return true;
 }
 
+static unsigned short ClampAmmoValue(int value)
+{
+	if (value < 0)
+		return 0;
+	if (value > 0xFFFF)
+		return 0xFFFF;
+
+	return static_cast<unsigned short>(value);
+}
+
+static bool HasVehiclePureSyncTurret(unsigned short model)
+{
+	switch (model)
+	{
+	case 407:
+	case 432:
+	case 601:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool HasVehiclePureSyncAdjustableProperty(unsigned short model)
+{
+	switch (model)
+	{
+	case 406:
+	case 443:
+	case 486:
+	case 520:
+	case 524:
+	case 525:
+	case 530:
+	case 531:
+	case 592:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool HasVehiclePureSyncDoors(unsigned short model)
+{
+	if (model < 400 || model > 611)
+		return false;
+
+	switch (model)
+	{
+	case 424:
+	case 430:
+	case 441:
+	case 446:
+	case 448:
+	case 449:
+	case 452:
+	case 453:
+	case 454:
+	case 457:
+	case 461:
+	case 462:
+	case 463:
+	case 464:
+	case 468:
+	case 472:
+	case 473:
+	case 481:
+	case 484:
+	case 485:
+	case 486:
+	case 493:
+	case 504:
+	case 509:
+	case 510:
+	case 521:
+	case 522:
+	case 523:
+	case 531:
+	case 537:
+	case 538:
+	case 539:
+	case 568:
+	case 569:
+	case 570:
+	case 571:
+	case 581:
+	case 586:
+	case 590:
+	case 594:
+	case 595:
+	case 606:
+	case 607:
+	case 610:
+		return false;
+	default:
+		return true;
+	}
+}
+
+static bool GetLocalDrivenVehicle(DWORD& outPlayerPed, unsigned short& outVehicleModel, float& outVehicleHealth)
+{
+	outPlayerPed = 0;
+	outVehicleModel = 0;
+	outVehicleHealth = 0.0f;
+
+	DWORD dwPlayerPed = *(DWORD*)0xB6F5F0;
+	if (!dwPlayerPed)
+		return false;
+
+	__try
+	{
+		const DWORD pedFlags = *(DWORD*)(dwPlayerPed + 0x46C);
+		if ((pedFlags & (1u << 8)) == 0)
+			return false;
+
+		DWORD dwVehicle = *(DWORD*)(dwPlayerPed + 0x58C);
+		if (!dwVehicle)
+			return false;
+
+		if (*(DWORD*)(dwVehicle + 0x460) != dwPlayerPed)
+			return false;
+
+		outPlayerPed = dwPlayerPed;
+		outVehicleModel = static_cast<unsigned short>(*(WORD*)(dwVehicle + 0x22));
+		outVehicleHealth = *(float*)(dwVehicle + 0x4C0);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+}
+
+static CVector GetEntityPosition(DWORD dwEntity)
+{
+	CVector position(0.0f, 0.0f, 0.0f);
+	if (!dwEntity)
+		return position;
+
+	__try
+	{
+		position.fX = *(float*)(dwEntity + 0x4);
+		position.fY = *(float*)(dwEntity + 0x8);
+		position.fZ = *(float*)(dwEntity + 0xC);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		position = CVector(0.0f, 0.0f, 0.0f);
+	}
+
+	return position;
+}
+
+static unsigned short GetCurrentWeaponTotalAmmo()
+{
+	DWORD dwPlayerPed = *(DWORD*)0xB6F5F0;
+	if (!dwPlayerPed)
+		return 0;
+
+	BYTE byteCurrentSlot = *(BYTE*)(dwPlayerPed + 0x718);
+	if (byteCurrentSlot >= 13)
+		return 0;
+
+	DWORD dwWeaponSlot = dwPlayerPed + 0x5A0 + (byteCurrentSlot * 0x1C);
+	DWORD totalAmmo = *(DWORD*)(dwWeaponSlot + 0xC);
+	if (totalAmmo > 0xFFFF)
+		totalAmmo = 0xFFFF;
+
+	return static_cast<unsigned short>(totalAmmo);
+}
+
 bool sendWeaponSlot5()
 {
 	if (!g_pNet) return false;
@@ -539,6 +710,197 @@ bool sendVehicleDamageSync(void* luaVM)
 	pBitStream->Write(vehicleID);
 	pBitStream->Write(&damage);
 	g_pNet->SendPacket(PACKET_ID_VEHICLE_DAMAGE_SYNC, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+	g_pNet->DeallocateNetBitStream(pBitStream);
+	return true;
+}
+
+bool sendVehiclePureSync(void* luaVM)
+{
+	if (!g_pNet)
+		return false;
+
+	float x = 0.0f;
+	float y = 0.0f;
+	float z = 0.0f;
+	float rotX = 0.0f;
+	float rotY = 0.0f;
+	float rotZ = 0.0f;
+	float velX = 0.0f;
+	float velY = 0.0f;
+	float velZ = 0.0f;
+
+	if (!ReadLuaFloatNumber(luaVM, 1, x) || !ReadLuaFloatNumber(luaVM, 2, y) || !ReadLuaFloatNumber(luaVM, 3, z))
+		return false;
+	if (!ReadLuaFloatNumber(luaVM, 4, rotX) || !ReadLuaFloatNumber(luaVM, 5, rotY) || !ReadLuaFloatNumber(luaVM, 6, rotZ))
+		return false;
+	if (!ReadLuaFloatNumber(luaVM, 7, velX) || !ReadLuaFloatNumber(luaVM, 8, velY) || !ReadLuaFloatNumber(luaVM, 9, velZ))
+		return false;
+
+	DWORD dwPlayerPed = 0;
+	unsigned short vehicleModel = 0;
+	float vehicleHealth = 0.0f;
+	if (!GetLocalDrivenVehicle(dwPlayerPed, vehicleModel, vehicleHealth))
+		return false;
+
+	const int argCount = call_lua_gettop ? call_lua_gettop(luaVM) : 0;
+	if (argCount >= 10 && !ReadLuaFloatNumber(luaVM, 10, vehicleHealth))
+		return false;
+
+	if (vehicleHealth < 0.0f)
+		vehicleHealth = 0.0f;
+	if (vehicleHealth > 2047.5f)
+		vehicleHealth = 2047.5f;
+
+	NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+	if (!pBitStream)
+		return false;
+
+	CControllerState controllerState{};
+	SPositionSync positionSync(false);
+	SRotationDegreesSync rotationSync;
+	SVelocitySync velocitySync;
+	SVelocitySync turnSpeedSync;
+	SVehicleHealthSync vehicleHealthSync;
+	SOccupiedSeatSync seatSync;
+	SPlayerHealthSync playerHealthSync;
+	SPlayerArmorSync playerArmorSync;
+	SVehiclePuresyncFlags flags{};
+	SVehicleTurretSync turretSync;
+	SDoorOpenRatioSync doorSync;
+
+	memset(&flags.data, 0, sizeof(flags.data));
+
+	positionSync.data.vecPosition = CVector(x, y, z);
+	rotationSync.data.vecRotation = CVector(rotX, rotY, rotZ);
+	velocitySync.data.vecVelocity = CVector(velX, velY, velZ);
+	turnSpeedSync.data.vecVelocity = CVector(0.0f, 0.0f, 0.0f);
+	vehicleHealthSync.data.fValue = vehicleHealth;
+	seatSync.data.ucSeat = 0;
+	playerHealthSync.data.fValue = *(float*)(dwPlayerPed + 0x540);
+	playerArmorSync.data.fValue = *(float*)(dwPlayerPed + 0x548);
+	doorSync.data.fRatio = 0.0f;
+
+	unsigned char ctx = 0;
+	pBitStream->Write(ctx);
+	WriteFullKeysync(controllerState, *pBitStream);
+	if (pBitStream->Version() >= 0x05F)
+		pBitStream->Write(static_cast<int>(vehicleModel));
+	pBitStream->Write(&positionSync);
+	WriteCameraOrientation(positionSync.data.vecPosition, *pBitStream);
+	pBitStream->Write(&seatSync);
+	pBitStream->Write(&rotationSync);
+	pBitStream->Write(&velocitySync);
+	pBitStream->Write(&turnSpeedSync);
+	pBitStream->Write(&vehicleHealthSync);
+	pBitStream->WriteBit(false);
+	if (pBitStream->Version() >= 0x047)
+	{
+		pBitStream->WriteBit(false);
+	}
+	pBitStream->Write(&playerHealthSync);
+	pBitStream->Write(&playerArmorSync);
+	pBitStream->Write(&flags);
+	if (HasVehiclePureSyncTurret(vehicleModel))
+	{
+		turretSync.data.fTurretX = 0.0f;
+		turretSync.data.fTurretY = 0.0f;
+		pBitStream->Write(&turretSync);
+	}
+	if (HasVehiclePureSyncAdjustableProperty(vehicleModel))
+	{
+		unsigned short adjustableProperty = 0;
+		pBitStream->Write(adjustableProperty);
+	}
+	if (HasVehiclePureSyncDoors(vehicleModel))
+	{
+		for (unsigned char i = 2; i < 6; ++i)
+		{
+			pBitStream->Write(&doorSync);
+		}
+	}
+
+	g_pNet->SendPacket(PACKET_ID_PLAYER_VEHICLE_PURESYNC, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
+	g_pNet->DeallocateNetBitStream(pBitStream);
+	return true;
+}
+
+bool sendPlayerWasted(void* luaVM)
+{
+	if (!g_pNet)
+		return false;
+
+	ElementID damagerId;
+	int weapon = 0;
+	int bodypart = 0;
+	int animGroup = 0;
+	int animID = 0;
+
+	if (!ReadLuaElementId(luaVM, 1, damagerId, true))
+		return false;
+	if (!ReadLuaIntNumber(luaVM, 2, weapon) || !ReadLuaIntNumber(luaVM, 3, bodypart))
+		return false;
+	if (!ReadLuaIntNumber(luaVM, 4, animGroup) || !ReadLuaIntNumber(luaVM, 5, animID))
+		return false;
+
+	if (weapon < 0 || weapon > 255)
+		return false;
+	if (bodypart < 0 || bodypart > 255)
+		return false;
+	if (animGroup < 0 || animGroup > 0xFFFF)
+		return false;
+	if (animID < 0 || animID > 0xFFFF)
+		return false;
+
+	DWORD dwPlayerPed = *(DWORD*)0xB6F5F0;
+	if (!dwPlayerPed)
+		return false;
+
+	CVector position = GetEntityPosition(dwPlayerPed);
+	unsigned short totalAmmo = GetCurrentWeaponTotalAmmo();
+
+	const int argCount = call_lua_gettop ? call_lua_gettop(luaVM) : 0;
+	if (argCount >= 8)
+	{
+		if (!ReadLuaFloatNumber(luaVM, 6, position.fX) || !ReadLuaFloatNumber(luaVM, 7, position.fY) || !ReadLuaFloatNumber(luaVM, 8, position.fZ))
+			return false;
+	}
+	else if (argCount >= 6)
+	{
+		return false;
+	}
+
+	if (argCount >= 9)
+	{
+		int ammo = 0;
+		if (!ReadLuaIntNumber(luaVM, 9, ammo))
+			return false;
+
+		totalAmmo = ClampAmmoValue(ammo);
+	}
+
+	NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+	if (!pBitStream)
+		return false;
+
+	SWeaponTypeSync weaponSync;
+	SBodypartSync bodypartSync;
+	SPositionSync positionSync(false);
+	SWeaponAmmoSync ammoSync(static_cast<unsigned char>(weapon), true, false);
+
+	weaponSync.data.ucWeaponType = static_cast<unsigned char>(weapon);
+	bodypartSync.data.uiBodypart = static_cast<unsigned int>(bodypart);
+	positionSync.data.vecPosition = position;
+	ammoSync.data.usTotalAmmo = totalAmmo;
+
+	pBitStream->WriteCompressed(static_cast<unsigned short>(animGroup));
+	pBitStream->WriteCompressed(static_cast<unsigned short>(animID));
+	pBitStream->Write(damagerId);
+	pBitStream->Write(&weaponSync);
+	pBitStream->Write(&bodypartSync);
+	pBitStream->Write(&positionSync);
+	pBitStream->Write(&ammoSync);
+
+	g_pNet->SendPacket(PACKET_ID_PLAYER_WASTED, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
 	g_pNet->DeallocateNetBitStream(pBitStream);
 	return true;
 }

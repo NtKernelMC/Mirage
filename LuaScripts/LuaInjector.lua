@@ -14,12 +14,6 @@ local targetResourceName = selfResource or ""
 local debugModeEnabled = false
 local uiRenderHookActive = false
 local activatePanicMode = nil
-local fenrirVehicle = nil
-local luftwaffeDrivers = {}
-local luftwaffeSelectedPlayer = nil
-local luftwaffeSelectedPid = nil
-local luftwaffeFilterId = ""
-local luftwaffeSpectating = false
 
 local ui = {
     width = 1160,
@@ -35,8 +29,10 @@ local ui = {
     keyBanner = "mirage_unified_banner",
     codeKey = "injector_code_buffer",
     resourceKey = "injector_target_resource",
-    luftwaffeFilterKey = "luftwaffe_filter_player_id",
 }
+
+local setHiddenFunctionCall
+local hiddenPcall
 
 local function joinPath(base, name)
     if not base or base == "" then return name end
@@ -85,7 +81,7 @@ local function setUiVisible(state)
         setCursorAlpha(isGUIOpen and 0 or 255)
     end
     if toggleAllControls then
-        pcall(toggleAllControls, not isGUIOpen)
+        hiddenPcall(toggleAllControls, not isGUIOpen)
     end
     showChat(not isGUIOpen)
     if DisableHUD then DisableHUD(isGUIOpen) end
@@ -213,7 +209,7 @@ end
 
 local function pushUiMessage(eventName, text)
     if not triggerEvent then return end
-    pcall(triggerEvent, eventName, root, tostring(text or ""))
+    hiddenPcall(triggerEvent, eventName, root, tostring(text or ""))
 end
 
 local function notifySuccess(text)
@@ -226,6 +222,21 @@ end
 
 local function notifyWarning(text)
     pushUiMessage("ShowWarning", text)
+end
+
+setHiddenFunctionCall = function(state)
+    if not mirageFunc then
+        return
+    end
+
+    mirageFunc("hideFunctionCall", state and true or false)
+end
+
+hiddenPcall = function(func, ...)
+    setHiddenFunctionCall(true)
+    local results = { pcall(func, ...) }
+    setHiddenFunctionCall(false)
+    return unpack(results)
 end
 
 local function trimText(text)
@@ -287,213 +298,6 @@ local function getNearestEmptyVehicle(radius)
     return closestVehicle, closestDistance
 end
 
-local function normalizePlayerFilterId(rawId)
-    local text = trimText(rawId)
-    if text == "" then
-        return ""
-    end
-
-    if text:sub(1, 1):lower() == "p" then
-        text = text:sub(2)
-    end
-
-    if text == "" then
-        return ""
-    end
-
-    return "p" .. text
-end
-
-local function getPlayerDisplayName(player)
-    local nametag = getPlayerNametagText and getPlayerNametagText(player) or nil
-    if nametag and nametag ~= "" then
-        return tostring(nametag)
-    end
-
-    local name = getPlayerName and getPlayerName(player) or "unknown"
-    return tostring(name or "unknown")
-end
-
-local function getPlayerDriverVehicle(player)
-    if not isElement(player) or getElementType(player) ~= "player" then
-        return nil
-    end
-
-    if getElementDimension(player) ~= 0 or getElementInterior(player) ~= 0 then
-        return nil
-    end
-
-    local vehicle = getPedOccupiedVehicle(player)
-    if not isElement(vehicle) then
-        return nil
-    end
-
-    if getPedOccupiedVehicleSeat(player) ~= 0 then
-        return nil
-    end
-
-    if getElementDimension(vehicle) ~= 0 or getElementInterior(vehicle) ~= 0 then
-        return nil
-    end
-
-    return vehicle
-end
-
-local function refreshLuftwaffeDrivers()
-    local normalizedFilter = normalizePlayerFilterId(luftwaffeFilterId)
-    local refreshed = {}
-
-    for _, player in ipairs(getElementsByType("player", root)) do
-        local vehicle = getPlayerDriverVehicle(player)
-        if vehicle then
-            local pid = tostring(getElementID(player) or "")
-            if normalizedFilter == "" or pid == normalizedFilter then
-                refreshed[#refreshed + 1] = {
-                    player = player,
-                    vehicle = vehicle,
-                    pid = pid,
-                    label = getPlayerDisplayName(player) .. " (" .. pid .. ")",
-                }
-            end
-        end
-    end
-
-    table.sort(refreshed, function(a, b)
-        return a.label:lower() < b.label:lower()
-    end)
-
-    luftwaffeDrivers = refreshed
-
-    local selectedStillValid = false
-    for i = 1, #luftwaffeDrivers do
-        if luftwaffeDrivers[i].player == luftwaffeSelectedPlayer then
-            luftwaffeSelectedPid = luftwaffeDrivers[i].pid
-            selectedStillValid = true
-            break
-        end
-    end
-
-    if not selectedStillValid then
-        luftwaffeSelectedPlayer = nil
-        luftwaffeSelectedPid = nil
-        if luftwaffeSpectating then
-            setCameraTarget(localPlayer)
-            luftwaffeSpectating = false
-        end
-    end
-end
-
-local function chooseFenrirVehicle()
-    local vehicle, distance = getNearestEmptyVehicle(30.0)
-    if not vehicle then
-        notifyError("Пустая тачка в радиусе 30 м не найдена")
-        return
-    end
-
-    fenrirVehicle = vehicle
-    notifySuccess("Пустая тачка выбрана. Дистанция: " .. tostring(distance))
-end
-
-local function validateFenrirVehicle()
-    if not isElement(fenrirVehicle) or getElementType(fenrirVehicle) ~= "vehicle" then
-        notifyError("Сначала выбери пустую тачку")
-        fenrirVehicle = nil
-        return nil
-    end
-
-    if not isVehicleEmpty(fenrirVehicle) then
-        notifyError("Выбранная тачка больше не пустая")
-        return nil
-    end
-
-    return fenrirVehicle
-end
-
-local function validateSelectedLuftwaffePlayer()
-    if not isElement(luftwaffeSelectedPlayer) then
-        notifyError("Сначала выбери игрока в списке")
-        luftwaffeSelectedPlayer = nil
-        luftwaffeSelectedPid = nil
-        return nil, nil
-    end
-
-    local vehicle = getPlayerDriverVehicle(luftwaffeSelectedPlayer)
-    if not vehicle then
-        notifyError("Выбранный игрок не онлайн, не в нулевом мире или не водитель")
-        refreshLuftwaffeDrivers()
-        return nil, nil
-    end
-
-    return luftwaffeSelectedPlayer, vehicle
-end
-
-function SafeTP(bx, by, bz, dim, int)
-    local resname = getResourceFromName('ugta_casino_entrance') 
-    local resourceRoot = getResourceRootElement(resname) 
-    triggerServerEvent( "RequestTeleport", resourceRoot, bx, by, bz, tonumber(dim), tonumber(int))
-    triggerServerEvent("SwitchPosition", resourceRoot)
-    setElementInterior(localPlayer, tonumber(int))
-end
-
-local oldX, oldY, oldZ
-
-local function toggleLuftwaffeSpectate()
-    if luftwaffeSpectating then
-        setCameraTarget(localPlayer)
-        luftwaffeSpectating = false
-        notifySuccess("Спек выключен")
-        setTimer(function()
-            safeTP(oldX, oldY, oldZ + 3.0, 0, 0)
-        end, 1000, 1)
-        return
-    end
-
-    local player = validateSelectedLuftwaffePlayer()
-    if not player then
-        return
-    end
-    oldX, oldY, oldZ = getElementPosition(localPlayer)
-    setCameraTarget(player)
-    luftwaffeSpectating = true
-    notifySuccess("Спек включен")
-end
-
-local function performAstalavistaBaby()
-    local ourVehicle = validateFenrirVehicle()
-    if not ourVehicle then
-        return
-    end
-
-    local _, targetVehicle = validateSelectedLuftwaffePlayer()
-    if not targetVehicle then
-        return
-    end
-
-    local x, y, z = getElementPosition(targetVehicle)
-    z = z + 1000.0
-
-    local okPush = mirageFunc("sendVehiclePushSync", ourVehicle)
-    local okUnoccupied = false
-    if okPush then
-        okUnoccupied = mirageFunc("sendUnoccupiedVehicleSync", ourVehicle, x, y, z, targetVehicle)
-    end
-
-    if okPush and okUnoccupied then
-        setTimer(function(vehicle)
-            if not isElement(vehicle) then
-                return
-            end
-
-            local vx, vy, vz = getElementPosition(vehicle)
-            setElementPosition(vehicle, vx, vy, z)
-        end, 2000, 1, ourVehicle)
-        fenrirVehicle = nil
-        notifySuccess("Astalavista Baby выполнен")
-    else
-        notifyError("Не удалось отправить PushSync/UnoccupiedSync")
-    end
-end
-
 local function getEventLogText()
     if #eventLines == 0 then return "" end
     return table.concat(eventLines, "\n")
@@ -511,7 +315,7 @@ local function copyToClipboard(text, successMessage)
         return
     end
 
-    local ok, copied = pcall(setClipboard, text)
+    local ok, copied = hiddenPcall(setClipboard, text)
     if ok and copied ~= false then
         notifySuccess(tostring(successMessage or "Copied"))
     else
@@ -559,7 +363,7 @@ end
 local function applyDebugMode(state)
     debugModeEnabled = state and true or false
     if setDebugViewActive then
-        pcall(setDebugViewActive, debugModeEnabled)
+        hiddenPcall(setDebugViewActive, debugModeEnabled)
     end
 end
 
@@ -686,7 +490,7 @@ local function injectCode(code)
     end
 
     if type(loadstring) == "function" then
-        local okSyntax, compiled = pcall(loadstring, code)
+        local okSyntax, compiled = hiddenPcall(loadstring, code)
         if (not okSyntax) or (not compiled) then
             notifyError("Error in syntax, look Debug Mode.")
             return
@@ -958,89 +762,6 @@ local function renderThreadsTab(contentY)
     mirageFunc("imgui.popFont")
 end
 
-local function renderLuftwaffeTab(contentY)
-    local bufferedFilterId = mirageFunc("imgui.getString", ui.luftwaffeFilterKey, luftwaffeFilterId) or luftwaffeFilterId
-    if bufferedFilterId ~= luftwaffeFilterId then
-        luftwaffeFilterId = bufferedFilterId
-        refreshLuftwaffeDrivers()
-    end
-
-    mirageFunc("imgui.setCursorPos", 14, contentY)
-    mirageFunc("imgui.pushFont", ui.keyButtonFont)
-    if mirageFunc("imgui.gradientButton", "Select Vehicle", 200, 52, 72, 14, 24, 245, 228, 48, 70, 255, 11, "luft_btn_pick_vehicle") then
-        chooseFenrirVehicle()
-    end
-    mirageFunc("imgui.sameLine")
-    if mirageFunc("imgui.gradientButton", "Refresh List", 210, 52, 72, 14, 24, 245, 228, 48, 70, 255, 11, "luft_btn_refresh") then
-        refreshLuftwaffeDrivers()
-    end
-    mirageFunc("imgui.sameLine")
-    if mirageFunc("imgui.gradientButton", "Cat", 120, 52, 72, 14, 24, 245, 228, 48, 70, 255, 11, "luft_btn_cat") then
-        setElementModel(localPlayer, 6742)
-    end
-    mirageFunc("imgui.sameLine")
-    local specLabel = luftwaffeSpectating and "Return Camera" or "Spectate"
-    if mirageFunc("imgui.gradientButton", specLabel, 190, 52, 64, 13, 20, 242, 192, 40, 62, 255, 11, "luft_btn_spec") then
-        toggleLuftwaffeSpectate()
-    end
-    mirageFunc("imgui.sameLine")
-    if mirageFunc("imgui.gradientButton", "Astalavista Baby", 230, 52, 92, 18, 24, 246, 186, 38, 56, 255, 11, "luft_btn_astalavista") then
-        performAstalavistaBaby()
-    end
-    mirageFunc("imgui.popFont")
-
-    local selectedVehicleLabel = "Не выбрана"
-    if isElement(fenrirVehicle) then
-        local distance = getDistanceToElement2D(fenrirVehicle)
-        selectedVehicleLabel = "Выбрана тачка: " .. tostring(fenrirVehicle) .. " | дистанция: " .. tostring(distance)
-    end
-
-    mirageFunc("imgui.setCursorPos", 14, contentY + 60)
-    mirageFunc("imgui.text", selectedVehicleLabel)
-
-    local selectedPlayerLabel = "Игрок не выбран"
-    if isElement(luftwaffeSelectedPlayer) then
-        selectedPlayerLabel = "Выбран игрок: " .. getPlayerDisplayName(luftwaffeSelectedPlayer) .. " (" .. tostring(luftwaffeSelectedPid or "?") .. ")"
-    end
-    mirageFunc("imgui.setCursorPos", 14, contentY + 84)
-    mirageFunc("imgui.text", selectedPlayerLabel)
-
-    local listY = contentY + 116
-    local listW = ui.width - 30
-    local listH = ui.height - listY - 118
-    if listH < 280 then
-        listH = 280
-    end
-
-    mirageFunc("imgui.setCursorPos", 14, listY)
-    mirageFunc("imgui.pushStyleColor", 0, 232, 222, 222, 255)
-    local alwaysVScrollbar = 16384
-    mirageFunc("imgui.beginChild", "luftwaffe_driver_host", listW, listH, true, alwaysVScrollbar, "luftwaffe_driver_host")
-
-    if #luftwaffeDrivers == 0 then
-        mirageFunc("imgui.text", "Водители не найдены")
-    else
-        for i = 1, #luftwaffeDrivers do
-            local entry = luftwaffeDrivers[i]
-            local row = entry.label
-            if luftwaffeSelectedPlayer == entry.player then
-                row = "> " .. row
-            end
-
-            if mirageFunc("imgui.button", row, listW - 24, 26, "luft_driver_" .. tostring(i)) then
-                luftwaffeSelectedPlayer = entry.player
-                luftwaffeSelectedPid = entry.pid
-            end
-        end
-    end
-
-    mirageFunc("imgui.endChild")
-    mirageFunc("imgui.popStyleColor", 1)
-
-    mirageFunc("imgui.setCursorPos", 14, ui.height - 74)
-    luftwaffeFilterId = mirageFunc("imgui.inputText", "ID игрока", luftwaffeFilterId, 24, 0, ui.luftwaffeFilterKey) or luftwaffeFilterId
-end
-
 local function renderUnifiedUi()
     if not isGUIOpen or block_dumper then return end
     if not mirageFunc("imgui.isReady") then return end
@@ -1112,13 +833,6 @@ local function renderUnifiedUi()
                 mirageFunc("imgui.endTabItem")
             end
 
-            local luftwaffeTab = mirageFunc("imgui.beginTabItem", "Luftwaffe", 0, false, "tab_luftwaffe")
-            if luftwaffeTab then
-                currentTab = "luftwaffe"
-                renderLuftwaffeTab(contentY)
-                mirageFunc("imgui.endTabItem")
-            end
-
             mirageFunc("imgui.endTabBar")
         else
             -- Safety fallback if tab bar is not ready this frame.
@@ -1146,9 +860,7 @@ local function ToggleGUI()
         currentTab = "injector"
         targetResourceName = selfResource or targetResourceName
         mirageFunc("imgui.setString", ui.resourceKey, targetResourceName)
-        mirageFunc("imgui.setString", ui.luftwaffeFilterKey, luftwaffeFilterId)
         refreshLuaThreads()
-        refreshLuftwaffeDrivers()
     end
 end
 
@@ -1185,7 +897,7 @@ setUiVisible(false)
 mirageFunc("imgui.setString", ui.resourceKey, targetResourceName)
 refreshLuaThreads()
 if isDebugViewActive then
-    local ok, currentFlag = pcall(isDebugViewActive)
+    local ok, currentFlag = hiddenPcall(isDebugViewActive)
     if ok and type(currentFlag) == "boolean" then
         debugModeEnabled = currentFlag
     end
