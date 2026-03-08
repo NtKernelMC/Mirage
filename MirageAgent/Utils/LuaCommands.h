@@ -220,13 +220,157 @@ static std::string GetNowTimestampString()
 	return std::string(buffer);
 }
 
-static bool DiscoverOwnerResourceAndLuaManager(void* callerLuaVm, void** outOwnerResource, void** outLuaManager)
+static void* ReadLuaUserDataPointer(void* luaVM, int idx)
 {
-	if (!callerLuaVm || !call_lua_getmtasaowner || !outOwnerResource || !outLuaManager)
+	if (!luaVM || !call_touserdata)
+		return nullptr;
+
+	void* rawUserData = call_touserdata(luaVM, idx);
+	if (!rawUserData)
+		return nullptr;
+
+	void* value = nullptr;
+	__try
+	{
+		value = *reinterpret_cast<void**>(rawUserData);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		value = nullptr;
+	}
+
+	return value;
+}
+
+static bool LuaCallResourceExistsByName(void* luaVM, const std::string& resourceName)
+{
+	if (!luaVM || resourceName.empty() || !call_getfield || !call_pushstring || !call_lua_pcall || !call_lua_gettop || !call_settop || !call_touserdata)
 		return false;
 
-	void* ownerLuaMain = call_lua_getmtasaowner(callerLuaVm);
-	if (!ownerLuaMain)
+	const int savedTop = call_lua_gettop(luaVM);
+	call_getfield(luaVM, LUA_GLOBALSINDEX, xorstr_("getResourceFromName"));
+	call_pushstring(luaVM, resourceName.c_str());
+	if (call_lua_pcall(luaVM, 1, 1, 0) != 0)
+	{
+		call_settop(luaVM, savedTop);
+		return false;
+	}
+
+	void* resource = call_touserdata(luaVM, -1);
+	call_settop(luaVM, savedTop);
+	return resource != nullptr;
+}
+
+static std::string ResolveCurrentResourceName(void* luaVM)
+{
+	if (!luaVM || !call_getfield || !call_lua_gettop || !call_settop || !call_lua_pcall || !call_tostring)
+		return {};
+
+	const int savedTop = call_lua_gettop(luaVM);
+	call_getfield(luaVM, LUA_GLOBALSINDEX, xorstr_("getResourceName"));
+	call_getfield(luaVM, LUA_GLOBALSINDEX, xorstr_("resource"));
+	if (call_lua_pcall(luaVM, 1, 1, 0) != 0)
+	{
+		call_settop(luaVM, savedTop);
+		return {};
+	}
+
+	unsigned int len = 0;
+	const char* text = call_tostring(luaVM, -1, &len);
+	std::string out;
+	if (text && len)
+		out.assign(text, len);
+
+	call_settop(luaVM, savedTop);
+	return out;
+}
+
+static void* ResolveResourceManager()
+{
+	if (g_mirage_resource_manager)
+		return g_mirage_resource_manager;
+
+	if (!g_mirage_resource_manager_slot || !IsReadableMemory(g_mirage_resource_manager_slot, sizeof(void*)))
+		return nullptr;
+
+	return *g_mirage_resource_manager_slot;
+}
+
+static void* ResolveTargetResourceByName(void* luaVM, const std::string& resourceName, std::string& outError)
+{
+	if (resourceName.empty())
+	{
+		outError = xorstr_("Target resource name is empty");
+		return nullptr;
+	}
+
+	void* resourceManager = ResolveResourceManager();
+	if (!resourceManager)
+	{
+		outError = xorstr_("Resource manager bridge pointer is not configured");
+		return nullptr;
+	}
+
+	if (!callGetResourceByName)
+	{
+		outError = xorstr_("GetResource bridge pointer is not configured");
+		return nullptr;
+	}
+
+	void* targetResource = callGetResourceByName(resourceManager, resourceName.c_str());
+	if (targetResource)
+		return targetResource;
+
+	if (!LuaCallResourceExistsByName(luaVM, resourceName))
+		outError = xorstr_("Target resource was not found");
+	else
+		outError = xorstr_("Safe target resource resolver failed");
+
+	return nullptr;
+}
+
+static bool DiscoverLuaManagerFromResource(void* resourcePtr, void* expectedLuaMain, void** outLuaManager)
+{
+	if (!resourcePtr || !outLuaManager)
+		return false;
+
+	const int cachedVmOff = g_mirage_cached_resource_vm_offset.load();
+	auto* resBase = reinterpret_cast<const char*>(resourcePtr);
+	if (cachedVmOff >= 0 && IsReadableMemory(resBase + cachedVmOff, sizeof(void*) * 2))
+	{
+		void* candidateVm = *reinterpret_cast<void* const*>(resBase + cachedVmOff);
+		void* candidateMgr = *reinterpret_cast<void* const*>(resBase + cachedVmOff + sizeof(void*));
+		if ((!expectedLuaMain || candidateVm == expectedLuaMain) && candidateMgr && IsReadableMemory(candidateMgr, sizeof(void*)))
+		{
+			*outLuaManager = candidateMgr;
+			return true;
+		}
+	}
+
+	for (int resOff = 0; resOff <= 0x180; resOff += static_cast<int>(sizeof(void*)))
+	{
+		if (!IsReadableMemory(resBase + resOff, sizeof(void*) * 2))
+			continue;
+
+		void* candidateVm = *reinterpret_cast<void* const*>(resBase + resOff);
+		if (expectedLuaMain && candidateVm != expectedLuaMain)
+			continue;
+
+		void* candidateMgr = *reinterpret_cast<void* const*>(resBase + resOff + sizeof(void*));
+		if (!candidateMgr || !IsReadableMemory(candidateMgr, sizeof(void*)))
+			continue;
+
+		g_mirage_cached_resource_vm_offset.store(resOff);
+		*outLuaManager = candidateMgr;
+		return true;
+	}
+
+	return false;
+}
+
+static bool DiscoverOwnerResourceAndLuaManagerByScan(void* callerLuaVm, void* ownerLuaMain, void** outOwnerResource, void** outLuaManager)
+{
+	if (!callerLuaVm || !ownerLuaMain || !outOwnerResource || !outLuaManager)
 		return false;
 
 	const int cachedResOff = g_mirage_cached_lua_main_resource_offset.load();
@@ -291,6 +435,26 @@ static bool DiscoverOwnerResourceAndLuaManager(void* callerLuaVm, void** outOwne
 	return false;
 }
 
+static bool DiscoverOwnerResourceAndLuaManager(void* callerLuaVm, void** outOwnerResource, void** outLuaManager)
+{
+	if (!callerLuaVm || !outOwnerResource || !outLuaManager)
+		return false;
+
+	void* ownerLuaMain = call_lua_getmtasaowner ? call_lua_getmtasaowner(callerLuaVm) : nullptr;
+	void* ownerResource = callGetResourceFromLuaState ? callGetResourceFromLuaState(callerLuaVm) : nullptr;
+
+	if (ownerResource && DiscoverLuaManagerFromResource(ownerResource, ownerLuaMain, outLuaManager))
+	{
+		*outOwnerResource = ownerResource;
+		return true;
+	}
+
+	if (!ownerLuaMain)
+		return false;
+
+	return DiscoverOwnerResourceAndLuaManagerByScan(callerLuaVm, ownerLuaMain, outOwnerResource, outLuaManager);
+}
+
 static bool LoadScriptInLuaMain(void* luaMain, const std::string& code, const std::string& chunkName)
 {
 	if (!luaMain || !callLoadScriptFromBufferInVm)
@@ -300,7 +464,7 @@ static bool LoadScriptInLuaMain(void* luaMain, const std::string& code, const st
 	return callLoadScriptFromBufferInVm(luaMain, code.c_str(), static_cast<unsigned int>(code.size()), chunkName.c_str());
 }
 
-static bool InjectCodeInDedicatedVm(void* callerLuaVm, const std::string& requestedResourceName, const std::string& code, unsigned long long& outThreadId, std::string& outError)
+static bool InjectCodeInDedicatedVmCore(void* callerLuaVm, const std::string& requestedResourceName, const std::string& code, unsigned long long& outThreadId, std::string& outError, const char** outStage)
 {
 	if (!callCreateVirtualMachine || !callRemoveVirtualMachine || !callLoadScriptFromBufferInVm)
 	{
@@ -310,6 +474,11 @@ static bool InjectCodeInDedicatedVm(void* callerLuaVm, const std::string& reques
 
 	void* ownerResource = nullptr;
 	void* luaManager = nullptr;
+
+	if (outStage)
+		*outStage = "resolve owner";
+	LogInFile(LOG_NAME, xorstr_("[LOG] luaThreadLoad: resolve owner requested='%s'\n"), requestedResourceName.c_str());
+
 	if (!DiscoverOwnerResourceAndLuaManager(callerLuaVm, &ownerResource, &luaManager))
 	{
 		outError = xorstr_("Failed to resolve owner resource/lua manager");
@@ -322,14 +491,59 @@ static bool InjectCodeInDedicatedVm(void* callerLuaVm, const std::string& reques
 		return false;
 	}
 
+	if (outStage)
+		*outStage = "resolve owner name";
+	LogInFile(LOG_NAME, xorstr_("[LOG] luaThreadLoad: resolve owner name\n"));
+
+	std::string ownerResourceName = ResolveCurrentResourceName(callerLuaVm);
+	if (ownerResourceName.empty())
+		ownerResourceName = xorstr_("owner");
+
+	void* targetResource = ownerResource;
+	std::string targetResourceName = ownerResourceName;
+
+	if (!requestedResourceName.empty() && requestedResourceName != ownerResourceName)
+	{
+		if (outStage)
+			*outStage = "resolve target resource";
+
+		std::string resolveErr;
+		targetResource = ResolveTargetResourceByName(callerLuaVm, requestedResourceName, resolveErr);
+		if (!targetResource)
+		{
+			outError = resolveErr.empty() ? xorstr_("Safe target resource resolver failed") : resolveErr;
+			if (outError == xorstr_("Target resource was not found"))
+				LogInFile(LOG_NAME, xorstr_("[WARN] luaThreadLoad target resource '%s' was not found.\n"), requestedResourceName.c_str());
+			else
+				LogInFile(LOG_NAME, xorstr_("[ERROR] luaThreadLoad failed to resolve target resource '%s' from '%s': %s.\n"),
+					requestedResourceName.c_str(),
+					ownerResourceName.c_str(),
+					outError.c_str());
+			return false;
+		}
+
+		targetResourceName = requestedResourceName;
+		LogInFile(LOG_NAME, xorstr_("[LOG] luaThreadLoad: resolved target resource '%s' from '%s'\n"),
+			requestedResourceName.c_str(),
+			ownerResourceName.c_str());
+	}
+
+	if (outStage)
+		*outStage = "create vm";
+	LogInFile(LOG_NAME, xorstr_("[LOG] luaThreadLoad: create vm for '%s'\n"), targetResourceName.c_str());
+
 	const unsigned long long threadId = g_mirage_lua_thread_next_id.fetch_add(1);
 	std::string chunkName = xorstr_("@mirage_thread_") + std::to_string(threadId) + xorstr_(".lua");
-	void* luaMain = callCreateVirtualMachine(luaManager, ownerResource, true);
+	void* luaMain = callCreateVirtualMachine(luaManager, targetResource, true);
 	if (!luaMain)
 	{
 		outError = xorstr_("CreateVirtualMachine failed");
 		return false;
 	}
+
+	if (outStage)
+		*outStage = "load script";
+	LogInFile(LOG_NAME, xorstr_("[LOG] luaThreadLoad: load script thread=%llu\n"), threadId);
 
 	if (!LoadScriptInLuaMain(luaMain, code, chunkName))
 	{
@@ -338,9 +552,13 @@ static bool InjectCodeInDedicatedVm(void* callerLuaVm, const std::string& reques
 		return false;
 	}
 
+	if (outStage)
+		*outStage = "track thread";
+	LogInFile(LOG_NAME, xorstr_("[LOG] luaThreadLoad: track thread=%llu resource='%s'\n"), threadId, targetResourceName.c_str());
+
 	MirageLuaThreadEntry entry;
 	entry.id = threadId;
-	entry.resourceName = requestedResourceName.empty() ? xorstr_("unknown") : requestedResourceName;
+	entry.resourceName = targetResourceName;
 	entry.loadedAt = GetNowTimestampString();
 	entry.luaManager = luaManager;
 	entry.luaMain = luaMain;
@@ -353,6 +571,12 @@ static bool InjectCodeInDedicatedVm(void* callerLuaVm, const std::string& reques
 
 	outThreadId = threadId;
 	return true;
+}
+
+static bool InjectCodeInDedicatedVm(void* callerLuaVm, const std::string& requestedResourceName, const std::string& code, unsigned long long& outThreadId, std::string& outError)
+{
+	const char* stage = "init";
+	return InjectCodeInDedicatedVmCore(callerLuaVm, requestedResourceName, code, outThreadId, outError, &stage);
 }
 
 static bool UnloadDedicatedVmThread(unsigned long long threadId, std::string& outError)
@@ -453,10 +677,14 @@ static bool ParsePointerValue(const std::string& input, uintptr_t& out)
 
 static bool SetLuaThreadBridgePointers(void* luaVM)
 {
-	std::string sCreate, sRemove, sLoad;
+	std::string sCreate, sRemove, sLoad, sGetResource, sGetResourceFromLuaState, sResourceManager, sResourceManagerSlot;
 	GetLuaStringArg(luaVM, 1, sCreate);
 	GetLuaStringArg(luaVM, 2, sRemove);
 	GetLuaStringArg(luaVM, 3, sLoad);
+	GetLuaStringArg(luaVM, 4, sGetResource);
+	GetLuaStringArg(luaVM, 5, sGetResourceFromLuaState);
+	GetLuaStringArg(luaVM, 6, sResourceManager);
+	GetLuaStringArg(luaVM, 7, sResourceManagerSlot);
 
 	uintptr_t value = 0;
 	if (!sCreate.empty() && ParsePointerValue(sCreate, value))
@@ -465,6 +693,14 @@ static bool SetLuaThreadBridgePointers(void* luaVM)
 		callRemoveVirtualMachine = reinterpret_cast<ptrRemoveVirtualMachine>(value);
 	if (!sLoad.empty() && ParsePointerValue(sLoad, value))
 		callLoadScriptFromBufferInVm = reinterpret_cast<ptrLoadScriptFromBufferInVm>(value);
+	if (!sGetResource.empty() && ParsePointerValue(sGetResource, value))
+		callGetResourceByName = reinterpret_cast<ptrGetResourceByName>(value);
+	if (!sGetResourceFromLuaState.empty() && ParsePointerValue(sGetResourceFromLuaState, value))
+		callGetResourceFromLuaState = reinterpret_cast<ptrGetResourceFromLuaState>(value);
+	if (!sResourceManager.empty() && ParsePointerValue(sResourceManager, value))
+		g_mirage_resource_manager = reinterpret_cast<void*>(value);
+	if (!sResourceManagerSlot.empty() && ParsePointerValue(sResourceManagerSlot, value))
+		g_mirage_resource_manager_slot = reinterpret_cast<void**>(value);
 
 	return true;
 }

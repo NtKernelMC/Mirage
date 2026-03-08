@@ -76,8 +76,7 @@ void AsyncThread()
     MH_STATUS mhStatus = MH_Initialize();
     if (mhStatus != MH_OK)
         LogInFile(LOG_NAME, xorstr_("[ERROR] MH_Initialize failed: %d\n"), mhStatus);
-    CrashHandler::Install();
-    
+
     // Хуй найдут пидоры
     CEasyRegistry* reg = new CEasyRegistry(HKEY_LOCAL_MACHINE, xorstr_(L"SOFTWARE\\WOW6432Node\\MicrosoftUpdate_8246G"), false);
     if (reg != nullptr)
@@ -88,6 +87,8 @@ void AsyncThread()
         EnsureDumpDirectory();
         delete reg;
     }
+    RemoveOldLog();
+    CrashHandler::Install();
     //lua_scripts_dir = xorstr_(L"C:\\Users\\RAID\\source\\repos\\Karakurt\\Win32\\Debug");
 	HMODULE hK32 = GetModuleHandleA(xorstr_("kernel32.dll"));
 	if (!hK32)
@@ -104,7 +105,6 @@ void AsyncThread()
 		}
 		else LogInFile(LOG_NAME, xorstr_("[LOG] ExitProcess export is NULL!\n"));
 	}
-    RemoveOldLog();
 	RemoveOldDumpedScripts(xorstr_("DumpedScripts"));
     RemoveOldDumpedScripts(xorstr_("Chunks"));
     LogInFile(LOG_NAME, xorstr_("[LOG] Mirage Injector By DroidZero! Build Version: %s\n"), MIRAGE_VERSION);
@@ -169,6 +169,7 @@ int __stdcall DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     {
     case DLL_PROCESS_ATTACH:
         ApplyMirageImageInfo(hModule, lpReserved);
+        CrashHandler::Install();
         AsyncBitch();
         break;
     case DLL_PROCESS_DETACH:

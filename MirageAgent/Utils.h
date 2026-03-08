@@ -148,6 +148,8 @@ typedef void(__cdecl* lua_pushcclosure)(void* L, lua_CFunction fn, int n);
 lua_pushcclosure call_pushcclosure = nullptr;
 typedef void(__cdecl* lua_setfield)(void* L, int idx, const char* k);
 lua_setfield call_setfield = nullptr;
+typedef void(__cdecl* lua_getfield)(void* L, int idx, const char* k);
+lua_getfield call_getfield = nullptr;
 typedef void(__cdecl* lua_pushboolean)(void* L, int bValue);
 lua_pushboolean call_pushboolean = nullptr;
 typedef int(__cdecl* lua_toboolean)(void* L, int idx);
@@ -188,6 +190,12 @@ typedef bool(__thiscall* ptrRemoveVirtualMachine)(void* luaManager, void* luaMai
 ptrRemoveVirtualMachine callRemoveVirtualMachine = nullptr;
 typedef bool(__thiscall* ptrLoadScriptFromBufferInVm)(void* luaMain, const char* cpBuffer, unsigned int uiSize, const char* szFileName);
 ptrLoadScriptFromBufferInVm callLoadScriptFromBufferInVm = nullptr;
+typedef void* (__thiscall* ptrGetResourceByName)(void* resourceManager, const char* resourceName);
+ptrGetResourceByName callGetResourceByName = nullptr;
+typedef void* (__stdcall* ptrGetResourceFromLuaState)(void* luaVM);
+ptrGetResourceFromLuaState callGetResourceFromLuaState = nullptr;
+void* g_mirage_resource_manager = nullptr;
+void** g_mirage_resource_manager_slot = nullptr;
 int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name);
 
 BYTE loadlib_prologue[5] = { 0x0 };

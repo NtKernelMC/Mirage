@@ -407,6 +407,9 @@ void SignatureScanner()
     call_setfield = (lua_setfield)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_setfield"));
     if (call_setfield != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_setfield!\n"));
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_setfield.\n"));
+    call_getfield = (lua_getfield)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_getfield"));
+    if (call_getfield != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_getfield!\n"));
+    else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_getfield.\n"));
     call_pushboolean = (lua_pushboolean)GetProcedure(xorstr_("lua5.1c.dll"), xorstr_("lua_pushboolean"));
     if (call_pushboolean != nullptr) LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to lua_pushboolean!\n"));
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for lua_pushboolean.\n"));
@@ -531,11 +534,63 @@ void SignatureScanner()
             LogInFile(LOG_NAME, xorstr_("[WARN] Can`t find signature for LoadScriptFromBufferInVm (pattern=example).\n"));
     }
 
+    // Class: CResourceManager
+    // Method: CResourceManager::GetResource(const char* szResourceName)
+    if (!callGetResourceByName)
+    {
+        callGetResourceByName = (ptrGetResourceByName)scan.FindCallPattern(xorstr_("client.dll"), xorstr_("E8 ? ? ? ? 85 C0 74 ? FF B5 ? ? ? ? 89 78"));
+        if (callGetResourceByName)
+            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to GetResourceByName.\n"));
+        else
+            LogInFile(LOG_NAME, xorstr_("[WARN] Can`t find signature for GetResourceByName.\n"));
+    }
+
+    // Class: CResourceManager
+    // Method: CResourceManager::GetResourceFromLuaState(lua_State* luaVM)
+    if (!callGetResourceFromLuaState)
+    {
+        callGetResourceFromLuaState = (ptrGetResourceFromLuaState)scan.FindCallPattern(xorstr_("client.dll"), xorstr_("E8 ? ? ? ? 6A ? 89 85"));
+        if (callGetResourceFromLuaState)
+            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to GetResourceFromLuaState.\n"));
+        else
+            LogInFile(LOG_NAME, xorstr_("[WARN] Can`t find signature for GetResourceFromLuaState.\n"));
+    }
+
+    if (!g_mirage_resource_manager && !g_mirage_resource_manager_slot)
+    {
+        DWORD mov_addr = (DWORD)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("A1 ? ? ? ? 89 45 ? 8D 85"));
+        if (mov_addr != NULL && IsReadableMemory((void*)mov_addr, 5) && *(BYTE*)mov_addr == 0xA1)
+        {
+            uintptr_t slot_addr = *(uintptr_t*)(mov_addr + 1);
+            g_mirage_resource_manager_slot = reinterpret_cast<void**>(slot_addr);
+
+            void* manager_ptr = nullptr;
+            if (IsReadableMemory(g_mirage_resource_manager_slot, sizeof(void*)))
+                manager_ptr = *g_mirage_resource_manager_slot;
+
+            if (manager_ptr)
+                g_mirage_resource_manager = manager_ptr;
+
+            LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to global CResourceManager*: slot=%p value=%p.\n"),
+                (void*)slot_addr,
+                manager_ptr);
+        }
+        else
+        {
+            LogInFile(LOG_NAME, xorstr_("[WARN] Can`t find signature for global CResourceManager*.\n"));
+        }
+    }
+
     // Note: CLuaMain::UnloadScript is inlined in this client build,
     // so dedicated VM unload uses CLuaManager::RemoveVirtualMachine.
 
     if (!callCreateVirtualMachine || !callRemoveVirtualMachine || !callLoadScriptFromBufferInVm)
     {
         LogInFile(LOG_NAME, xorstr_("[WARN] Lua thread VM bridge signatures are not fully configured.\n"));
+    }
+
+    if (!callGetResourceByName || !callGetResourceFromLuaState || (!g_mirage_resource_manager && !g_mirage_resource_manager_slot))
+    {
+        LogInFile(LOG_NAME, xorstr_("[WARN] Cross-resource Lua thread resolver signatures are not fully configured.\n"));
     }
 }

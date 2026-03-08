@@ -579,7 +579,6 @@ local function evDumper(sourceResource, functionName, isAllowedByACL, luaFilenam
         and tostring(args[1]) ~= "loadVehicleDirtServer"
     then
         if resname ~= "nrp_player_head"
-            and resname ~= selfResource
             and tostring(args[1]) ~= "saveWindowsPositionServer"
             and tostring(args[1]) ~= "afk:cancelByKey"
             and tostring(args[1]) ~= "onPlayerAFKStateChange"

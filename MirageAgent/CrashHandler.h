@@ -70,6 +70,18 @@ namespace CrashHandler
             return;
         out[0] = '\0';
 
+        const char* useFileName = fileName ? fileName : LOG_NAME;
+
+        if (!lua_scripts_dir.empty())
+        {
+            const std::string logDir = CvWideToAnsi(lua_scripts_dir);
+            if (!logDir.empty())
+            {
+                sprintf_s(out, outSize, "%s\\%s", logDir.c_str(), useFileName);
+                return;
+            }
+        }
+
         char exePath[MAX_PATH]{};
         if (!GetModuleFileNameA(nullptr, exePath, MAX_PATH))
             return;
@@ -78,7 +90,7 @@ namespace CrashHandler
         if (slash)
             *(slash + 1) = '\0';
 
-        sprintf_s(out, outSize, "%s%s", exePath, fileName ? fileName : "mirage_crash.log");
+        sprintf_s(out, outSize, "%s%s", exePath, useFileName);
     }
 
     inline void AppendLog(const char* fmt, ...)
@@ -93,7 +105,7 @@ namespace CrashHandler
         va_end(args);
 
         char path[MAX_PATH]{};
-        BuildPath(path, sizeof(path), "mirage_crash.log");
+        BuildPath(path, sizeof(path), LOG_NAME);
 
         HANDLE hFile = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (hFile == INVALID_HANDLE_VALUE)
@@ -103,6 +115,7 @@ namespace CrashHandler
         DWORD written = 0;
         const DWORD len = static_cast<DWORD>(std::strlen(text));
         WriteFile(hFile, text, len, &written, nullptr);
+        FlushFileBuffers(hFile);
         CloseHandle(hFile);
     }
 
@@ -433,33 +446,20 @@ namespace CrashHandler
         if (InterlockedCompareExchange(&s_inCrashHandler, 1, 0) != 0)
             return EXCEPTION_EXECUTE_HANDLER;
 
-        EnsureSymbols();
         RefreshMainModuleInfo();
 
         if (!faultAddr)
             faultAddr = static_cast<uintptr_t>(ctx.Eip);
 
-        const AddressSpace faultSpace = GetAddressSpace(faultAddr);
-        char faultDesc[1024]{};
-        DescribeAddress(faultAddr, faultDesc, sizeof(faultDesc));
-
         SYSTEMTIME st{};
         GetLocalTime(&st);
-        AppendLog("\n================ CRASH =================\n");
+        AppendLog("\n============ CRASH MINIMAL ============\n");
         AppendLog("Time: %04u-%02u-%02u %02u:%02u:%02u.%03u\n",
             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
         if (reason && *reason)
             AppendLog("Reason: %s\n", reason);
         AppendLog("Code: 0x%08X\n", code);
-        AppendLog("Address space: %s\n", AddressSpaceName(faultSpace));
-        if (faultSpace == AddressSpace::Unknown)
-            AppendLog("Address: VA=0x%08X RVA=n/a\n", static_cast<unsigned int>(faultAddr));
-        else
-            AppendLog("Address: VA=0x%08X RVA=0x%08X\n", static_cast<unsigned int>(faultAddr), RuntimeToRva(faultAddr));
-        AppendLog("Address detail: %s\n", faultDesc);
-        AppendLog("Main module: base=0x%08X size=0x%08X\n", static_cast<unsigned int>(s_mainBase), s_mainSize);
-        if (s_mirageBase && s_mirageSize)
-            AppendLog("Mirage image: base=0x%08X size=0x%08X\n", static_cast<unsigned int>(s_mirageBase), s_mirageSize);
+        AppendLog("Fault VA: 0x%08X\n", static_cast<unsigned int>(faultAddr));
         AppendLog("Registers: EAX=%08X EBX=%08X ECX=%08X EDX=%08X ESI=%08X EDI=%08X EBP=%08X ESP=%08X EIP=%08X\n",
             ctx.Eax,
             ctx.Ebx,
@@ -470,15 +470,40 @@ namespace CrashHandler
             ctx.Ebp,
             ctx.Esp,
             ctx.Eip);
-        AppendLog("Recent calls (top 16):\n");
-        DumpStackTrace(ctx, StackTraceFilter::All, 16);
-        AppendLog("GTA SA main-module stack trace:\n");
-        DumpStackTrace(ctx, StackTraceFilter::MainModule, 64);
-        AppendLog("Mirage image stack trace:\n");
-        DumpStackTrace(ctx, StackTraceFilter::MirageImage, 64);
-        AppendLog("Full stack trace:\n");
-        DumpStackTrace(ctx, StackTraceFilter::All, 64);
-        DumpRawStack(ctx);
+
+        __try
+        {
+            EnsureSymbols();
+
+            const AddressSpace faultSpace = GetAddressSpace(faultAddr);
+            char faultDesc[1024]{};
+            DescribeAddress(faultAddr, faultDesc, sizeof(faultDesc));
+
+            AppendLog("============== CRASH FULL =============\n");
+            AppendLog("Address space: %s\n", AddressSpaceName(faultSpace));
+            if (faultSpace == AddressSpace::Unknown)
+                AppendLog("Address: VA=0x%08X RVA=n/a\n", static_cast<unsigned int>(faultAddr));
+            else
+                AppendLog("Address: VA=0x%08X RVA=0x%08X\n", static_cast<unsigned int>(faultAddr), RuntimeToRva(faultAddr));
+            AppendLog("Address detail: %s\n", faultDesc);
+            AppendLog("Main module: base=0x%08X size=0x%08X\n", static_cast<unsigned int>(s_mainBase), s_mainSize);
+            if (s_mirageBase && s_mirageSize)
+                AppendLog("Mirage image: base=0x%08X size=0x%08X\n", static_cast<unsigned int>(s_mirageBase), s_mirageSize);
+            AppendLog("Recent calls (top 16):\n");
+            DumpStackTrace(ctx, StackTraceFilter::All, 16);
+            AppendLog("GTA SA main-module stack trace:\n");
+            DumpStackTrace(ctx, StackTraceFilter::MainModule, 64);
+            AppendLog("Mirage image stack trace:\n");
+            DumpStackTrace(ctx, StackTraceFilter::MirageImage, 64);
+            AppendLog("Full stack trace:\n");
+            DumpStackTrace(ctx, StackTraceFilter::All, 64);
+            DumpRawStack(ctx);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            AppendLog("[CrashHandler] Secondary fault while building extended crash report. code=0x%08X\n", GetExceptionCode());
+        }
+
         AppendLog("========================================\n");
 
         return EXCEPTION_EXECUTE_HANDLER;
