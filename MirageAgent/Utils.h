@@ -10,7 +10,7 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("V6.6") // Версия инжектора
+#define MIRAGE_VERSION xorstr_("V6.7") // Версия инжектора
 #define TO_ELEMENTID(x) ((ElementID) reinterpret_cast < unsigned long > (x) )
 #include <Windows.h>
 #include <stdio.h>
@@ -798,4 +798,90 @@ inline bool WriteGenericCred_NoUserA(
 	cred.CredentialBlob = (BYTE*)passwordAscii.data();
 
 	return CredWriteW(&cred, 0) == TRUE;
+}
+std::string utf8_to_cp1251_safe(const char* data, size_t len)
+{
+	std::string out;
+	size_t      offset = 0;
+
+	while (offset < len)
+	{
+		// ищем следующий 0x00
+		size_t next0 = offset;
+		while (next0 < len && data[next0] != '\0')
+			++next0;
+
+		const char* chunk = data + offset;
+		size_t      clen = next0 - offset;           // длина куска без 0
+
+		if (clen)
+		{
+			// пробуем обычную конвертацию
+			int wlen = MultiByteToWideChar(
+				CP_UTF8, MB_ERR_INVALID_CHARS,
+				chunk, static_cast<int>(clen),
+				nullptr, 0);
+
+			if (wlen > 0)
+			{
+				std::vector<wchar_t> wbuf(static_cast<size_t>(wlen));
+				MultiByteToWideChar(CP_UTF8, 0,
+					chunk, static_cast<int>(clen),
+					wbuf.data(), wlen);
+
+				int cplen = WideCharToMultiByte(
+					1251, 0,
+					wbuf.data(), wlen,
+					nullptr, 0, nullptr, nullptr);
+
+				if (cplen > 0)
+				{
+					size_t old = out.size();
+					out.resize(old + static_cast<size_t>(cplen));
+					WideCharToMultiByte(
+						1251, 0,
+						wbuf.data(), wlen,
+						out.data() + old, cplen,
+						nullptr, nullptr);
+				}
+				else
+				{
+					// CP-1251 не смог — копируем «как есть»
+					out.append(chunk, clen);
+				}
+			}
+			else
+			{
+				// битый UTF-8 — копируем «как есть»
+				out.append(chunk, clen);
+			}
+		}
+
+		// если встретили 0x00 в середине буфера — сохраняем его тоже
+		if (next0 < len)
+			out.push_back('\0');
+
+		offset = next0 + 1;   // переходим за найденный 0
+	}
+
+	return out;
+}
+static std::string GenerateDumpPath()
+{
+	// Время в мс от эпохи Unix
+	const uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::system_clock::now().time_since_epoch())
+		.count();
+
+	// Потокобезопасный RNG
+	thread_local std::mt19937 rng{
+		static_cast<std::mt19937::result_type>(
+			std::chrono::steady_clock::now().time_since_epoch().count()) };
+
+	std::uniform_int_distribution<int> dist(10000, 99999);
+
+	std::ostringstream oss;
+	oss << "mem_" << now_ms << '_' << dist(rng) << ".dmp";
+
+	return (std::filesystem::path(kDumpDir) / oss.str()).string();
 }

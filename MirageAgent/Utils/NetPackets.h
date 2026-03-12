@@ -501,7 +501,7 @@ int sendPlayerSync(CVector position)
 			bitStream->Write(&aim);
 		}
 		bitStream->WriteBit(false);
-		g_pNet->SendPacket(PACKET_ID_PLAYER_PURESYNC, bitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+		g_pNet->SendPacket(PACKET_ID_PLAYER_PURESYNC, bitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
 		g_pNet->DeallocateNetBitStream(bitStream);
 		return 1;
 	}
@@ -522,7 +522,7 @@ void completeInOut(ElementID pedID, ElementID vehID)
 	unsigned char ucAction = static_cast<unsigned char>(1); // enter completed
 	pBitStream->WriteBits(&ucAction, 4);
 
-	g_pNet->SendPacket(PACKET_ID_VEHICLE_INOUT, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+	g_pNet->SendPacket(PACKET_ID_VEHICLE_INOUT, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
 	g_pNet->DeallocateNetBitStream(pBitStream);
 }
 
@@ -552,7 +552,7 @@ bool sendInOutRequest(void* luaVM)
 	pBitStream->WriteBit(bIsOnWater);
 	pBitStream->WriteBits(&ucDoor, 3);
 
-	g_pNet->SendPacket(PACKET_ID_VEHICLE_INOUT, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+	g_pNet->SendPacket(PACKET_ID_VEHICLE_INOUT, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
 	g_pNet->DeallocateNetBitStream(pBitStream);
 	completeInOut(pedID, vehID);
 	return true;
@@ -613,7 +613,7 @@ bool sendVehiclePushSync(void* luaVM)
 	pushSync.data.vehicleID = vehicleID;
 	pBitStream->Write(&pushSync);
 
-	g_pNet->SendPacket(PACKET_ID_VEHICLE_PUSH_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_RELIABLE_ORDERED);
+	g_pNet->SendPacket(PACKET_ID_VEHICLE_PUSH_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
 	g_pNet->DeallocateNetBitStream(pBitStream);
 	return true;
 }
@@ -709,7 +709,7 @@ bool sendVehicleDamageSync(void* luaVM)
 
 	pBitStream->Write(vehicleID);
 	pBitStream->Write(&damage);
-	g_pNet->SendPacket(PACKET_ID_VEHICLE_DAMAGE_SYNC, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+	g_pNet->SendPacket(PACKET_ID_VEHICLE_DAMAGE_SYNC, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
 	g_pNet->DeallocateNetBitStream(pBitStream);
 	return true;
 }
@@ -819,7 +819,7 @@ bool sendVehiclePureSync(void* luaVM)
 		}
 	}
 
-	g_pNet->SendPacket(PACKET_ID_PLAYER_VEHICLE_PURESYNC, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+	g_pNet->SendPacket(PACKET_ID_PLAYER_VEHICLE_PURESYNC, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
 	g_pNet->DeallocateNetBitStream(pBitStream);
 	return true;
 }
@@ -900,7 +900,7 @@ bool sendPlayerWasted(void* luaVM)
 	pBitStream->Write(&positionSync);
 	pBitStream->Write(&ammoSync);
 
-	g_pNet->SendPacket(PACKET_ID_PLAYER_WASTED, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+	g_pNet->SendPacket(PACKET_ID_PLAYER_WASTED, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
 	g_pNet->DeallocateNetBitStream(pBitStream);
 	return true;
 }

@@ -160,6 +160,7 @@ private:
 static std::atomic_bool g_imgui_hooks_installed = false;
 static std::atomic_bool g_imgui_initialized = false;
 static std::atomic_bool g_imgui_render_enabled = true;
+static std::atomic_bool g_imgui_lua_render_allowed = false;
 static std::atomic_bool g_imgui_capture_input = false;
 static std::atomic_bool g_imgui_block_mta_binds = false;
 static std::atomic_bool g_imgui_force_cursor = false;
@@ -168,6 +169,7 @@ static std::atomic_int g_imgui_theme_request = -1; // 0 dark, 1 light, 2 classic
 static std::string g_imgui_ini_path;
 
 static std::mutex g_imgui_mutex;
+static std::mutex g_imgui_hook_state_mutex;
 static std::vector<ImGuiLuaCommand> g_imgui_queue;
 static std::unordered_map<std::string, bool> g_imgui_bool_state;
 static std::unordered_map<std::string, float> g_imgui_float_state;
@@ -196,6 +198,27 @@ static PresentSignature g_present_original = nullptr;
 static ResetSignature g_reset_original = nullptr;
 
 static bool g_cursor_visible_by_imgui = false;
+static std::atomic_bool g_imgui_hook_thread_running = false;
+
+static inline bool ImGuiIsLuaRenderAllowed()
+{
+    return g_imgui_render_enabled && g_imgui_lua_render_allowed;
+}
+
+static void ImGuiSetLuaRenderAllowed(bool allowed)
+{
+    g_imgui_lua_render_allowed = allowed;
+    if (allowed)
+        return;
+
+    g_imgui_capture_input = false;
+    g_imgui_block_mta_binds = false;
+    g_imgui_force_cursor = false;
+    g_imgui_draw_cursor = false;
+
+    std::lock_guard<std::mutex> lock(g_imgui_mutex);
+    g_imgui_queue.clear();
+}
 
 static inline bool ImGuiIsInputMessage(UINT msg)
 {
@@ -223,6 +246,31 @@ static inline bool ImGuiIsInputMessage(UINT msg)
     }
 }
 
+static inline bool ImGuiIsF1Message(UINT msg, WPARAM wparam)
+{
+    if (static_cast<UINT>(wparam) != VK_F1)
+        return false;
+
+    switch (msg)
+    {
+    case WM_KEYDOWN:
+    case WM_KEYUP:
+    case WM_SYSKEYDOWN:
+    case WM_SYSKEYUP:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static inline bool ImGuiIsInitialKeyDown(UINT msg, LPARAM lparam)
+{
+    if (msg != WM_KEYDOWN && msg != WM_SYSKEYDOWN)
+        return false;
+
+    return (lparam & (static_cast<LPARAM>(1) << 30)) == 0;
+}
+
 static inline bool ImGuiIsPassthroughHotkey(UINT msg, WPARAM wparam)
 {
     switch (msg)
@@ -238,7 +286,6 @@ static inline bool ImGuiIsPassthroughHotkey(UINT msg, WPARAM wparam)
 
     switch (static_cast<UINT>(wparam))
     {
-    case VK_F1:
     case VK_F5:
     case VK_ESCAPE:
         return true;
@@ -247,8 +294,29 @@ static inline bool ImGuiIsPassthroughHotkey(UINT msg, WPARAM wparam)
     }
 }
 
+static bool ImGuiHandleRenderToggleHotkey(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+{
+    if (!ImGuiIsF1Message(msg, wparam))
+        return false;
+
+    if (g_imgui_initialized && ImGui::GetCurrentContext())
+        ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam);
+
+    if (ImGuiIsInitialKeyDown(msg, lparam))
+    {
+        const bool allowed = !g_imgui_lua_render_allowed.load();
+        ImGuiSetLuaRenderAllowed(allowed);
+        LogInFile(LOG_NAME, xorstr_("[LOG] ImGui Lua render %s by F1.\n"), allowed ? "enabled" : "disabled");
+    }
+
+    return true;
+}
+
 static LRESULT CALLBACK ImGuiWndProcHook(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
+    if (ImGuiHandleRenderToggleHotkey(hwnd, msg, wparam, lparam))
+        return 1;
+
     bool should_handle = g_imgui_initialized &&
         (g_imgui_capture_input || g_imgui_force_cursor || g_imgui_block_mta_binds);
 
@@ -276,7 +344,7 @@ static LRESULT CALLBACK ImGuiWndProcHook(HWND hwnd, UINT msg, WPARAM wparam, LPA
 
 static void ImGuiUpdateSystemCursor()
 {
-    const bool should_show = g_imgui_force_cursor || (g_imgui_capture_input && g_imgui_render_enabled);
+    const bool should_show = ImGuiIsLuaRenderAllowed() && (g_imgui_force_cursor || g_imgui_capture_input);
     if (should_show == g_cursor_visible_by_imgui)
         return;
 
@@ -329,7 +397,7 @@ static const char* ImGuiResolveIniPath()
 
 static void ImGuiDrawCustomCursor()
 {
-    if (!g_imgui_draw_cursor || !ImGui::GetCurrentContext())
+    if (!g_imgui_draw_cursor || !ImGuiIsLuaRenderAllowed() || !ImGui::GetCurrentContext())
         return;
 
     ImGuiIO& io = ImGui::GetIO();
@@ -729,7 +797,7 @@ static void ImGuiExecuteLuaQueue()
         commands.swap(g_imgui_queue);
     }
 
-    if (!g_imgui_render_enabled)
+    if (!ImGuiIsLuaRenderAllowed())
         return;
 
     std::vector<bool> tab_bar_stack;
@@ -1246,7 +1314,8 @@ static void ImGuiEnsureWndProcHook(IDirect3DDevice9* device)
     if (!hwnd)
         return;
 
-    if (g_imgui_hwnd == hwnd && g_imgui_old_wndproc)
+    WNDPROC current_wndproc = reinterpret_cast<WNDPROC>(GetWindowLongPtr(hwnd, GWLP_WNDPROC));
+    if (g_imgui_hwnd == hwnd && g_imgui_old_wndproc && current_wndproc == &ImGuiWndProcHook)
         return;
 
     if (g_imgui_hwnd && g_imgui_old_wndproc)
@@ -1365,10 +1434,43 @@ static HRESULT __stdcall ImGuiPresentHook(IDirect3DDevice9* device, const RECT* 
     return D3D_OK;
 }
 
+static bool ImGuiAreDx9HooksAlive()
+{
+    void** present_slot = get_function_slot(17);
+    void** reset_slot = get_function_slot(16);
+    if (!present_slot || !reset_slot)
+        return false;
+    if (!g_present_original || !g_reset_original)
+        return false;
+
+    return (*present_slot == reinterpret_cast<void*>(&ImGuiPresentHook)) &&
+        (*reset_slot == reinterpret_cast<void*>(&ImGuiResetHook));
+}
+
+static bool ImGuiIsWndProcHookAlive()
+{
+    if (!g_imgui_hwnd || !g_imgui_old_wndproc)
+        return false;
+
+    return reinterpret_cast<WNDPROC>(GetWindowLongPtr(g_imgui_hwnd, GWLP_WNDPROC)) == &ImGuiWndProcHook;
+}
+
 static bool InstallDx9Hooks()
 {
-    if (g_imgui_hooks_installed)
+    std::lock_guard<std::mutex> lock(g_imgui_hook_state_mutex);
+
+    const bool was_marked_installed = g_imgui_hooks_installed.load();
+    if (was_marked_installed && ImGuiAreDx9HooksAlive())
         return true;
+
+    if (was_marked_installed)
+    {
+        g_present_vtbl_hook.remove();
+        g_reset_vtbl_hook.remove();
+        g_present_original = nullptr;
+        g_reset_original = nullptr;
+        g_imgui_hooks_installed = false;
+    }
 
     void** present_slot = get_function_slot(17);
     void** reset_slot = get_function_slot(16);
@@ -1388,7 +1490,10 @@ static bool InstallDx9Hooks()
     g_reset_original = g_reset_vtbl_hook.original<ResetSignature>();
 
     g_imgui_hooks_installed = true;
-    LogInFile(LOG_NAME, xorstr_("[LOG] DX9 vtable hooks installed (Present/Reset).\n"));
+    if (was_marked_installed)
+        LogInFile(LOG_NAME, xorstr_("[LOG] DX9 vtable hooks reinstalled (Present/Reset).\n"));
+    else
+        LogInFile(LOG_NAME, xorstr_("[LOG] DX9 vtable hooks installed (Present/Reset).\n"));
     return true;
 }
 
@@ -1399,26 +1504,54 @@ static DWORD WINAPI ImGuiHookInstallThread(LPVOID)
         if (GetModuleHandleA(xorstr_("d3d9.dll")) != nullptr)
         {
             if (InstallDx9Hooks())
+            {
+                g_imgui_hook_thread_running = false;
                 return 0;
+            }
         }
         Sleep(250);
     }
+    g_imgui_hook_thread_running = false;
     return 0;
 }
 
 static void StartImGuiHookingAsync()
 {
-    static std::atomic_bool started = false;
-    if (started.exchange(true))
+    if (g_imgui_hook_thread_running.exchange(true))
         return;
 
     HANDLE h_thread = CreateThread(nullptr, 0, ImGuiHookInstallThread, nullptr, 0, nullptr);
     if (h_thread)
         CloseHandle(h_thread);
+    else
+        g_imgui_hook_thread_running = false;
+}
+
+static void ImGuiEnsureHooksForLuaInvoke()
+{
+    if (g_imgui_initialized && !ImGui::GetCurrentContext())
+    {
+        g_imgui_initialized = false;
+        LogInFile(LOG_NAME, xorstr_("[WARN] ImGui context disappeared, waiting for reinit.\n"));
+    }
+
+    if (!ImGuiAreDx9HooksAlive())
+    {
+        if (!InstallDx9Hooks())
+            StartImGuiHookingAsync();
+    }
+
+    if (g_imgui_device && !ImGuiIsWndProcHookAlive())
+    {
+        ImGuiEnsureWndProcHook(g_imgui_device);
+        if (ImGuiIsWndProcHookAlive())
+            LogInFile(LOG_NAME, xorstr_("[LOG] ImGui WndProc hook restored.\n"));
+    }
 }
 
 static void ShutdownImGuiHooking()
 {
+    g_imgui_hook_thread_running = false;
     g_present_vtbl_hook.remove();
     g_reset_vtbl_hook.remove();
     g_present_original = nullptr;
@@ -1449,16 +1582,24 @@ static void ShutdownImGuiHooking()
         g_cursor_visible_by_imgui = false;
     }
 
+    ImGuiSetLuaRenderAllowed(false);
     ImGuiDestroyContextSafe();
 }
 
 static bool HandleImGuiInvoke(void* lua_vm, const std::string& func_name)
 {
-    if (!findStringIC(func_name, xorstr_("imgui")))
+    const bool is_render_allowed_query = findStringIC(func_name, xorstr_("isimguirenderallowed"));
+    if (!is_render_allowed_query && !findStringIC(func_name, xorstr_("imgui")))
         return false;
 
     call_lua_remove(lua_vm, 1);
+    ImGuiEnsureHooksForLuaInvoke();
 
+    if (is_render_allowed_query || findStringIC(func_name, xorstr_("imgui.isrenderallowed")))
+    {
+        call_pushboolean(lua_vm, ImGuiIsLuaRenderAllowed() ? 1 : 0);
+        return true;
+    }
     if (findStringIC(func_name, xorstr_("imgui.isready")))
     {
         call_pushboolean(lua_vm, g_imgui_initialized ? 1 : 0);
@@ -1472,7 +1613,7 @@ static bool HandleImGuiInvoke(void* lua_vm, const std::string& func_name)
     }
     if (findStringIC(func_name, xorstr_("imgui.isvisible")))
     {
-        call_pushboolean(lua_vm, g_imgui_render_enabled ? 1 : 0);
+        call_pushboolean(lua_vm, ImGuiIsLuaRenderAllowed() ? 1 : 0);
         return true;
     }
     if (findStringIC(func_name, xorstr_("imgui.captureinput")) || findStringIC(func_name, xorstr_("imgui.setinput")))

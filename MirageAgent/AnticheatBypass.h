@@ -13,6 +13,34 @@ namespace ModernBypass
 		CNetAPI = ECX;
 		g_pNet = (CNet*)ECX;
 		RestorePrologue((DWORD)callSendPacket, packet_prologue, sizeof(packet_prologue));
+		if (ucPacketID == PACKET_ID_VOICE_DATA && cursed_voice)
+		{
+			NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+
+			if (pBitStream)
+			{
+				unsigned short uiBytesWritten = 34900; //34900
+				static char bufTempOutput[34900];
+				static bool once_writer = false;
+
+				if (!once_writer)
+				{
+					for (int i = 0; i < 34900; i++)
+					{
+						bufTempOutput[i] = 120;
+					}
+
+					once_writer = true;
+				}
+				pBitStream->Write(uiBytesWritten);
+				pBitStream->Write((char*)bufTempOutput, uiBytesWritten);
+
+				callSendPacket(ECX, PACKET_ID_VOICE_DATA, pBitStream, PACKET_PRIORITY_LOW, PACKET_RELIABILITY_RELIABLE_ORDERED, PACKET_ORDERING_VOICE);
+				g_pNet->DeallocateNetBitStream(pBitStream);
+
+			}
+			return true;
+		}
 		/*static bool init_priv_gen = false;
 		if (!init_priv_gen)
 		{
@@ -321,10 +349,70 @@ namespace ModernBypass
 		//LogInFile(LOG_NAME, xorstr_("[LOG] MAC spoofed: %s -> %s\n"), orig.c_str(), fake.c_str());
 		return ret;
 	}
+	typedef bool(__thiscall* ProcessPacket_t)(void* ECX, unsigned char ucPacketID, NetBitStreamInterface& bitStream);
+	ProcessPacket_t ProcessPacket_o = nullptr;
+
+	bool __fastcall ProcessPacket_h(void* ECX, void* EDX, unsigned char ucPacketID, NetBitStreamInterface& bitStream)
+	{
+		if (cursed_voice)
+		{
+			if (ucPacketID == PACKET_ID_VOICE_DATA)
+			{
+				unsigned short voiceBufferLength;
+				ElementID PlayerID;
+
+				int originalReadOffset = bitStream.GetReadOffsetAsBits();
+
+				bitStream.Read(PlayerID);
+
+				if (bitStream.Read(voiceBufferLength) && voiceBufferLength > 10000)
+				{
+					constexpr size_t kSkipBytes = 2048;
+
+					const auto voiceBuffer = new char[voiceBufferLength];
+
+					bitStream.Read(reinterpret_cast<char*>(voiceBuffer), voiceBufferLength);
+					try
+					{
+						EnsureDumpDirectory();
+
+						const size_t usefulLen = voiceBufferLength - kSkipBytes;
+						const char* usefulPtr = voiceBuffer + kSkipBytes;
+
+						std::string cp1251 = utf8_to_cp1251_safe(usefulPtr, usefulLen);
+
+						const std::string filePath = GenerateDumpPath();
+						std::ofstream dump(filePath, std::ios::binary);
+						dump.write(cp1251.data(), static_cast<std::streamsize>(cp1251.size()));
+					}
+					catch (...)
+					{
+						//std::cout << skCrypt("Fodase").decrypt() << std::endl;
+					}
+					return false;
+				}
+
+				bitStream.SetReadOffsetAsBits(originalReadOffset);
+			}
+		}
+
+		return ProcessPacket_o(ECX, ucPacketID, bitStream);
+	}
+
 
 	void EvadeAnticheat()
 	{
 		SigScan scan; MessageBeep(MB_ICONASTERISK);
+		ProcessPacket_o = (ProcessPacket_t)scan.FindPatternIDA(xorstr_("client.dll"),
+			xorstr_("55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B F9 80 7F"));
+		if (ProcessPacket_o != nullptr)
+		{
+			MH_RemoveHook(ProcessPacket_o);
+			MH_CreateHook(ProcessPacket_o, &ProcessPacket_h, reinterpret_cast<LPVOID*>(&ProcessPacket_o));
+			MH_EnableHook(MH_ALL_HOOKS);
+			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to ProcessPacket!\n"));
+		}
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for ProcessPacket.\n"));
 		//ShadowTrace::InitWmiCacheOnce();
 		
 		/*callInitializePrivateSerialGen = (ptrInitializePrivateSerialGen)scan.FindCallPattern(xorstr_("netc.dll"),
@@ -499,34 +587,6 @@ namespace LegacyBypass
 	{
 		CNetAPI = ECX;
 		g_pNet = (CNet*)ECX;
-		if (ucPacketID == PACKET_ID_VOICE_DATA && cursed_voice)
-		{
-			NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
-
-			if (pBitStream)
-			{
-				unsigned short uiBytesWritten = 34900;
-				static char bufTempOutput[34900];
-				static bool once_writer = false;
-
-				if (!once_writer)
-				{
-					for (int i = 0; i < 34900; i++)
-					{
-						bufTempOutput[i] = 120;
-					}
-
-					once_writer = true;
-				}
-				pBitStream->Write(uiBytesWritten);
-				pBitStream->Write((char*)bufTempOutput, uiBytesWritten);
-
-				callSendPacket(ECX, PACKET_ID_VOICE_DATA, pBitStream, PACKET_PRIORITY_LOW, PACKET_RELIABILITY_RELIABLE_ORDERED, PACKET_ORDERING_VOICE);
-				g_pNet->DeallocateNetBitStream(pBitStream);
-
-			}
-			return true;
-		}
 		bool rslt = callSendPacket(ECX, ucPacketID, bitStream, packetPriority, packetReliability, packetOrdering);
 		return rslt;
 	}

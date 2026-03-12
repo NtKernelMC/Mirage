@@ -1,33 +1,36 @@
-ImGui API для Lua (через mirageFunc)
+ImGui API for Lua (via mirageFunc)
 
-Важно:
-1) Все вызовы идут через `mirageFunc("imgui.<имя>", ...)`.
-2) UI рендерится очередью: события интерактива (button/tab/begin) читаются с задержкой 1 кадр.
-3) Для TabBar/TabItem всегда соблюдай пары Begin/End в каждом кадре.
-4) Текст передается в ImGui как есть, без автоматической перекодировки.
-5) Украинские символы поддерживаются (кириллический диапазон + украинские буквы).
-6) Конфиг ImGui (`imgui.ini`) сохраняется в `%LOCALAPPDATA%\Temp\Mirage\imgui.ini`.
+Important:
+1) All calls go through `mirageFunc("imgui.<name>", ...)`.
+2) Interactive state (`button`, `tab`, `begin`) is read with a 1-frame delay because Mirage uses a queued render pipeline.
+3) Always keep `Begin/End` pairs balanced every frame, especially `TabBar/TabItem`.
+4) Text is passed to ImGui as-is. There is no automatic transcoding.
+5) `imgui.ini` is stored in `%LOCALAPPDATA%\Temp\Mirage\imgui.ini`.
+6) `F1` is owned by Mirage `WndProc`. Do not bind `F1` in Lua.
+7) Gate Lua rendering with `mirageFunc("isImguiRenderAllowed")` or `mirageFunc("imgui.isRenderAllowed")`.
 
 ------------------------------------------------------------
-Базовое управление
+Basic control
 ------------------------------------------------------------
 `mirageFunc("imgui.isReady") -> bool`
 `mirageFunc("imgui.enable", true/false)`
 `mirageFunc("imgui.isVisible") -> bool`
+`mirageFunc("imgui.isRenderAllowed") -> bool`
+`mirageFunc("isImguiRenderAllowed") -> bool`
 `mirageFunc("imgui.captureInput", true/false)`
 `mirageFunc("imgui.blockBinds", true/false)`
-`mirageFunc("imgui.forceCursor", true/false)`  -- принудительный курсор + блок биндов
-`mirageFunc("imgui.drawCursor", true/false)`   -- рисовать кастомный ImGui-курсор
+`mirageFunc("imgui.forceCursor", true/false)`
+`mirageFunc("imgui.drawCursor", true/false)`
 `mirageFunc("imgui.clear")`
 
-Рекомендованный набор для меню:
+Recommended menu setup:
 `imgui.captureInput = true`
 `imgui.blockBinds = true`
 `imgui.forceCursor = true`
 `imgui.drawCursor = true`
 
 ------------------------------------------------------------
-Окна и layout
+Windows and layout
 ------------------------------------------------------------
 `mirageFunc("imgui.setNextWindowPos", x, y, cond)`
 `mirageFunc("imgui.setNextWindowSize", w, h, cond)`
@@ -48,7 +51,7 @@ ImGui API для Lua (через mirageFunc)
 `mirageFunc("imgui.setWindowFontScale", scale)`
 
 ------------------------------------------------------------
-Виджеты
+Widgets
 ------------------------------------------------------------
 `mirageFunc("imgui.text", text)`
 `mirageFunc("imgui.bulletText", text)`
@@ -60,7 +63,7 @@ ImGui API для Lua (через mirageFunc)
 `mirageFunc("imgui.sliderInt", label, min, max, default, format, key) -> number`
 `mirageFunc("imgui.inputText", label, default, maxLen, flags, key) -> string`
 `mirageFunc("imgui.inputTextMultiline", label, default, maxLen, width, height, flags, key) -> string`
-`mirageFunc("imgui.codeEditorLua", label, default, width, height, key) -> string` -- Lua syntax highlight editor
+`mirageFunc("imgui.codeEditorLua", label, default, width, height, key) -> string`
 `mirageFunc("imgui.combo", label, "item1|item2|item3", defaultIndex, key) -> number`
 `mirageFunc("imgui.progressBar", value, width, height, overlayText)`
 
@@ -71,15 +74,15 @@ State getters:
 `mirageFunc("imgui.getString", key, fallback) -> string`
 `mirageFunc("imgui.setString", key, value) -> bool`
 
-`imgui.codeEditorLua` palette (current):
-- Background: black
-- Border/line accents: red
-- Lua keywords: yellow
-- Numbers: light blue
-- Strings: green
+`imgui.codeEditorLua` palette:
+- background: black
+- border accents: red
+- keywords: yellow
+- numbers: light blue
+- strings: green
 
 ------------------------------------------------------------
-Темы и стиль
+Themes and style
 ------------------------------------------------------------
 `mirageFunc("imgui.themeDark")`
 `mirageFunc("imgui.themeLight")`
@@ -93,7 +96,7 @@ Style stack:
 `mirageFunc("imgui.pushStyleVarVec2", styleVarIndex, x, y)`
 `mirageFunc("imgui.popStyleVar", count)`
 
-Полезные индексы цветов:
+Useful color indexes:
 - Text = 0
 - Button / Hover / Active = 21 / 22 / 23
 - Header / Hover / Active = 24 / 25 / 26
@@ -106,14 +109,14 @@ Style stack:
 - TabDimmedSelectedOverline = 39
 
 ------------------------------------------------------------
-Шрифты
+Fonts
 ------------------------------------------------------------
 `mirageFunc("imgui.loadFont", "C:/Windows/Fonts/verdana.ttf", 18, "verdana18") -> bool`
 `mirageFunc("imgui.pushFont", "verdana18")`
 `mirageFunc("imgui.popFont")`
 
 ------------------------------------------------------------
-Изображения
+Images
 ------------------------------------------------------------
 `mirageFunc("imgui.loadImage", "C:/path/image.png", "logo") -> bool`
 `mirageFunc("imgui.unloadImage", "logo") -> bool`
@@ -121,10 +124,10 @@ Style stack:
 `mirageFunc("imgui.drawImage", "logo", x, y, w, h, u0, v0, u1, v1, r, g, b, a, foreground)`
 
 ------------------------------------------------------------
-Draw-list примитивы (ESP/Overlay)
+Draw list primitives
 ------------------------------------------------------------
-`foreground = true`  -> рисовать поверх UI
-`foreground = false` -> рисовать в фоне
+`foreground = true`  -> draw above UI
+`foreground = false` -> draw in background
 
 `mirageFunc("imgui.drawLine", x1, y1, x2, y2, r, g, b, a, thickness, foreground)`
 `mirageFunc("imgui.drawRect", x, y, w, h, r, g, b, a, rounding, thickness, foreground)`
@@ -135,28 +138,18 @@ Draw-list примитивы (ESP/Overlay)
 `mirageFunc("imgui.drawImage", key, x, y, w, h, u0, v0, u1, v1, r, g, b, a, foreground)`
 
 ------------------------------------------------------------
-Мини-пример
+Mini example
 ------------------------------------------------------------
+`if not mirageFunc("isImguiRenderAllowed") then return end`
 `mirageFunc("imgui.enable", true)`
 `mirageFunc("imgui.captureInput", true)`
 `mirageFunc("imgui.blockBinds", true)`
 `mirageFunc("imgui.forceCursor", true)`
 `mirageFunc("imgui.drawCursor", true)`
-
 `mirageFunc("imgui.setNextWindowPos", 200, 120, 0)`
 `mirageFunc("imgui.setNextWindowSize", 640, 420, 0)`
 `local opened = mirageFunc("imgui.begin", "Mirage Menu", true, 0, "main_menu")`
 `if opened then`
-`    if mirageFunc("imgui.beginTabBar", "main_tabs", 0, "main_tabs") then`
-`        if mirageFunc("imgui.beginTabItem", "Injector", 0, false, "tab_inj") then`
-`            mirageFunc("imgui.text", "Lua code")`
-`            mirageFunc("imgui.endTabItem")`
-`        end`
-`        if mirageFunc("imgui.beginTabItem", "Events", 0, false, "tab_ev") then`
-`            mirageFunc("imgui.text", "Events log")`
-`            mirageFunc("imgui.endTabItem")`
-`        end`
-`        mirageFunc("imgui.endTabBar")`
-`    end`
-`    mirageFunc("imgui.end")`
+`    mirageFunc("imgui.text", "Lua code")`
 `end`
+`mirageFunc("imgui.end")`

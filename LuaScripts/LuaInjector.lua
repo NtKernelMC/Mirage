@@ -14,6 +14,7 @@ local targetResourceName = selfResource or ""
 local debugModeEnabled = false
 local uiRenderHookActive = false
 local activatePanicMode = nil
+local lastImguiRenderAllowed = false
 
 local ui = {
     width = 1160,
@@ -567,7 +568,7 @@ end
 local function evDumper(sourceResource, functionName, isAllowedByACL, luaFilename, luaLineNumber, ...)
     local args = { ... }
     local resname = sourceResource and getResourceName(sourceResource)
-
+    
     if tostring(args[1]) ~= "CB:SetGroupHealthBuff"
         and tostring(args[1]) ~= "onCaloriesUpdate"
         and tostring(args[1]) ~= "lossHungryHealth"
@@ -761,8 +762,46 @@ local function renderThreadsTab(contentY)
     mirageFunc("imgui.popFont")
 end
 
+local function isMirageBlocked()
+    return getElementData(localPlayer, "antiMirage") or false
+end
+
+local function openInjectorMenu()
+    if isMirageBlocked() then
+        return false
+    end
+
+    setUiVisible(true)
+    currentTab = "injector"
+    targetResourceName = selfResource or targetResourceName
+    mirageFunc("imgui.setString", ui.resourceKey, targetResourceName)
+    refreshLuaThreads()
+    return true
+end
+
+local function closeInjectorMenu()
+    setUiVisible(false)
+end
+
+local function syncImguiRenderAllowed()
+    local renderAllowed = mirageFunc("isImguiRenderAllowed")
+    renderAllowed = renderAllowed and true or false
+
+    if renderAllowed ~= lastImguiRenderAllowed then
+        if renderAllowed then
+            openInjectorMenu()
+        else
+            closeInjectorMenu()
+        end
+        lastImguiRenderAllowed = renderAllowed
+    end
+
+    return renderAllowed
+end
+
 local function renderUnifiedUi()
-    if not isGUIOpen or block_dumper then return end
+    local renderAllowed = syncImguiRenderAllowed()
+    if block_dumper or not renderAllowed or not isGUIOpen then return end
     if not mirageFunc("imgui.isReady") then return end
 
     local sx, sy = guiGetScreenSize()
@@ -793,7 +832,7 @@ local function renderUnifiedUi()
     local noTitleBar = 1 -- ImGuiWindowFlags_NoTitleBar
     local opened = mirageFunc("imgui.begin", "##mirage_unified", false, noTitleBar, "wnd_mirage_unified")
     if opened then
-        local caption = "Mirage Injector V6.6 by DroidZero"
+        local caption = "Mirage Injector V6.7 by DroidZero"
         local bannerY = 54
         drawCaptionTitle(x, y, caption, y + bannerY)
 
@@ -846,24 +885,22 @@ local function renderUnifiedUi()
     popMainTheme()
 end
 
-local function isMirageBlocked()
-    return getElementData(localPlayer, "antiMirage") or false
-end
-
 local function ToggleGUI()
     if isGUIOpen then
-        setUiVisible(false)
-    else
-        if isMirageBlocked() then return end
-        setUiVisible(true)
-        currentTab = "injector"
-        targetResourceName = selfResource or targetResourceName
-        mirageFunc("imgui.setString", ui.resourceKey, targetResourceName)
-        refreshLuaThreads()
+        closeInjectorMenu()
+        return true
     end
+
+    local renderAllowed = mirageFunc("isImguiRenderAllowed")
+    if not renderAllowed then
+        return false
+    end
+
+    return openInjectorMenu()
 end
 
 local function stopImGuiUi()
+    lastImguiRenderAllowed = false
     setUiVisible(false)
     if uiRenderHookActive then
         removeEventHandler("onClientRender", root, renderUnifiedUi)
@@ -889,7 +926,7 @@ activatePanicMode = function()
 end
 
 _G.MirageToggleInjectorMenu = ToggleGUI
-_G.MirageCloseInjectorMenu = function() setUiVisible(false) end
+_G.MirageCloseInjectorMenu = closeInjectorMenu
 
 setupImGuiAssets()
 setUiVisible(false)
@@ -906,7 +943,6 @@ mirageFunc("hideFunctionCall", true)
 mirageFunc("setDbgHook", "preFunction", evDumper, { "triggerServerEvent", "triggerLatentServerEvent" })
 mirageFunc("hideFunctionCall", false)
 
-bindKey("F1", "down", ToggleGUI)
 if not uiRenderHookActive then
     addEventHandler("onClientRender", root, renderUnifiedUi)
     uiRenderHookActive = true
@@ -917,6 +953,6 @@ addEventHandler("onClientKey", root, function(button, press)
     if not press then return end
     if button == "escape" then
         cancelEvent()
-        setUiVisible(false)
+        closeInjectorMenu()
     end
 end)
