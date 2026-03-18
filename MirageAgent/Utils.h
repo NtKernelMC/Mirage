@@ -10,7 +10,7 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("V6.7") // Версия инжектора
+#define MIRAGE_VERSION xorstr_("V6.8") // Версия инжектора
 #define TO_ELEMENTID(x) ((ElementID) reinterpret_cast < unsigned long > (x) )
 #include <Windows.h>
 #include <stdio.h>
@@ -124,6 +124,7 @@ ptrGetThreadContext callGetThreadContext = nullptr;
 BOOL __stdcall hookGetThreadContext(HANDLE hThread, LPCONTEXT lpContext);
 typedef HMODULE(WINAPI* ptrLoadLibraryExW)(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags);
 ptrLoadLibraryExW callLoadLibraryExW = nullptr;
+LPVOID loadLibraryExWTarget = nullptr;
 BYTE getproc_prologue[5];
 void SignatureScanner();
 typedef void(__cdecl* ptrScreenShot)(const char* szParameters);
@@ -440,7 +441,7 @@ DWORD WINAPI SniperThread(LPVOID)
 void CorePatcher()
 {
 	SigScan scan; DWORD oldProtect = 0;
-	DWORD patch_addr = (DWORD)scan.FindPatternIDA(xorstr_("core.dll"), xorstr_("68 ? ? ? ? 68 ? ? ? ? E8"));
+	DWORD patch_addr = (DWORD)scan.FindPatternIDA(xorstr_("core.dll"), xorstr_("68 ? ? ? ? 68 ? ? ? ? E8 ? ? ? ? 68 ? ? ? ? 68 ? ? ? ? E8 ? ? ? ? 68 ? ? ? ? 68 ? ? ? ? E8 ? ? ? ? 68 ? ? ? ? 68 ? ? ? ? E8 ? ? ? ? 68 ? ? ? ? 68 ? ? ? ? E8 ? ? ? ? 68 ? ? ? ? 68 ? ? ? ? E8 ? ? ? ? A3"));
 	if (patch_addr != NULL)
 	{
 		BYTE nop[15] = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
@@ -521,7 +522,9 @@ HMODULE __stdcall hkLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dw
 		LogInFile(LOG_NAME, xorstr_("[ERROR] callLoadLibraryExW is NULL in hkLoadLibraryExW!\n"));
 		return nullptr;
 	}
+	goto call_original;
 	RestorePrologue((DWORD)callLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue)); // восстанавливаем пролог функции
+call_original:
 	HMODULE hModule = callLoadLibraryExW(lpLibFileName, hFile, dwFlags);
 	if (lpLibFileName != nullptr && wcslen(lpLibFileName) >= 1)
 	{
@@ -535,7 +538,6 @@ HMODULE __stdcall hkLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dw
 			SignatureScanner(); // Запускаем сканнер сигнатур и ставим хуки
 		}
 	}
-	MakeJump((DWORD)callLoadLibraryExW, (DWORD)hkLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
 	return hModule;
 }
 BOOL aRegDelnodeRecurse(HKEY hKeyRoot, LPSTR lpSubKey)

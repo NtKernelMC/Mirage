@@ -773,7 +773,10 @@ local function openInjectorMenu()
 
     setUiVisible(true)
     currentTab = "injector"
-    targetResourceName = selfResource or targetResourceName
+    targetResourceName = trimText(targetResourceName)
+    if targetResourceName == "" then
+        targetResourceName = selfResource or ""
+    end
     mirageFunc("imgui.setString", ui.resourceKey, targetResourceName)
     refreshLuaThreads()
     return true
@@ -832,7 +835,7 @@ local function renderUnifiedUi()
     local noTitleBar = 1 -- ImGuiWindowFlags_NoTitleBar
     local opened = mirageFunc("imgui.begin", "##mirage_unified", false, noTitleBar, "wnd_mirage_unified")
     if opened then
-        local caption = "Mirage Injector V6.7 by DroidZero"
+        local caption = "Mirage Injector V6.8 by DroidZero"
         local bannerY = 54
         drawCaptionTitle(x, y, caption, y + bannerY)
 

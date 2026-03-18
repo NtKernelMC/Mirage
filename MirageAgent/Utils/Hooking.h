@@ -9,9 +9,10 @@ DWORD MakeJump(const DWORD jmp_address, const DWORD hookAddr, BYTE* prologue, co
 	__try
 	{
 		DWORD old_prot = 0;
-		if (prologue == nullptr) return 0x0;
+		if (prologue == nullptr || jmp_address == 0x0 || prologue_size < 5) return 0x0;
 
-		VirtualProtect((void*)jmp_address, prologue_size, PAGE_EXECUTE_READWRITE, &old_prot);
+		if (!VirtualProtect((void*)jmp_address, prologue_size, PAGE_EXECUTE_READWRITE, &old_prot))
+			return 0x0;
 
 		memcpy(prologue, (void*)jmp_address, prologue_size);
 
@@ -19,6 +20,7 @@ DWORD MakeJump(const DWORD jmp_address, const DWORD hookAddr, BYTE* prologue, co
 		DWORD relOffset = hookAddr - jmp_address - 5;
 		memcpy(&addrToBYTEs[1], &relOffset, 4);
 		memcpy((void*)jmp_address, addrToBYTEs, 5);
+		FlushInstructionCache(GetCurrentProcess(), (void*)jmp_address, prologue_size);
 
 		if (!enableTrampoline)
 		{
@@ -69,12 +71,15 @@ bool RestorePrologue(DWORD addr, BYTE* prologue, size_t prologue_size, DWORD tra
 {
 	__try
 	{
-		if (prologue == nullptr)
+		if (prologue == nullptr || addr == 0x0 || prologue_size == 0)
 			return false;
 
 		DWORD old_prot = 0;
-		VirtualProtect((void*)addr, prologue_size, PAGE_EXECUTE_READWRITE, &old_prot);
+		if (!VirtualProtect((void*)addr, prologue_size, PAGE_EXECUTE_READWRITE, &old_prot))
+			return false;
+
 		memcpy((void*)addr, prologue, prologue_size);
+		FlushInstructionCache(GetCurrentProcess(), (void*)addr, prologue_size);
 		VirtualProtect((void*)addr, prologue_size, old_prot, &old_prot);
 
 		if (trampoline != 0)

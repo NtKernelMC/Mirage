@@ -84,9 +84,13 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
       <AdditionalLibraryDirectories>$(DXSDK_DIR)Lib\x86;C:\Program Files (x86)\Microsoft DirectX SDK (August 2009)\Lib\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <EnableUAC>false</EnableUAC>
     </Link>
+    <PostBuildEvent>
+      <Command>for %%I in ("$(TargetPath)") do for %%J in ("$(ProjectDir)..\ProjectMirage\$(Configuration)\MirageAgent.dll") do if /I not "%%~fI"=="%%~fJ" copy /Y "%%~fI" "%%~fJ"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -99,7 +103,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpplatest</LanguageStandard>
-      <DebugInformationFormat>None</DebugInformationFormat>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <AdditionalIncludeDirectories>$(DXSDK_DIR)Include;C:\Program Files (x86)\Microsoft DirectX SDK (August 2009)\Include;C:\Users\RAID\source\repos\DroidV\SDK;C:\Users\RAID\source\repos\Mirage\MirageAgent\magic_enum;C:\Users\RAID\source\repos\Mirage\MirageAgent\NetAPI\utils;$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -110,10 +114,15 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
       <AdditionalLibraryDirectories>$(DXSDK_DIR)Lib\x86;C:\Program Files (x86)\Microsoft DirectX SDK (August 2009)\Lib\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <EnableUAC>false</EnableUAC>
     </Link>
+    <PostBuildEvent>
+      <Command>for %%I in ("$(TargetPath)") do for %%J in ("$(ProjectDir)..\ProjectMirage\$(Configuration)\MirageAgent.dll") do if /I not "%%~fI"=="%%~fJ" copy /Y "%%~fI" "%%~fJ"
+if exist "$(TargetDir)$(TargetName).pdb" for %%I in ("$(TargetDir)$(TargetName).pdb") do for %%J in ("$(ProjectDir)..\ProjectMirage\$(Configuration)\$(TargetName).pdb") do if /I not "%%~fI"=="%%~fJ" copy /Y "%%~fI" "%%~fJ"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>

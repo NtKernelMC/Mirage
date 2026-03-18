@@ -140,12 +140,19 @@ void AsyncThread()
 	HMODULE hForLoadLib = hKernelBase ? hKernelBase : hKernel32_2;
     if (hForLoadLib)
 	{
-		callLoadLibraryExW = (ptrLoadLibraryExW)GetProcAddress(hForLoadLib, xorstr_("LoadLibraryExW"));
-		if (callLoadLibraryExW != nullptr)
+		loadLibraryExWTarget = GetProcAddress(hForLoadLib, xorstr_("LoadLibraryExW"));
+		if (loadLibraryExWTarget != nullptr)
 		{
-            // inline hook for LoadLibraryExW
-			MakeJump((DWORD)callLoadLibraryExW, (DWORD)hkLoadLibraryExW, loadlib_prologue, sizeof(loadlib_prologue));
-			LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW is Hooked!\n"));
+			MH_STATUS hookStatus = MH_CreateHook(loadLibraryExWTarget, &hkLoadLibraryExW, reinterpret_cast<LPVOID*>(&callLoadLibraryExW));
+			if (hookStatus == MH_OK || hookStatus == MH_ERROR_ALREADY_CREATED)
+			{
+				hookStatus = MH_EnableHook(loadLibraryExWTarget);
+				if (hookStatus == MH_OK || hookStatus == MH_ERROR_ENABLED)
+					LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW is Hooked by MinHook!\n"));
+				else
+					LogInFile(LOG_NAME, xorstr_("[ERROR] MH_EnableHook failed for LoadLibraryExW: %d\n"), hookStatus);
+			}
+			else LogInFile(LOG_NAME, xorstr_("[ERROR] MH_CreateHook failed for LoadLibraryExW: %d\n"), hookStatus);
 		}
 		else LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW export is NULL!\n"));
 

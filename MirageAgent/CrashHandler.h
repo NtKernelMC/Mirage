@@ -13,6 +13,7 @@
 #include <new.h>
 
 #pragma comment(lib, "Imagehlp.lib")
+#pragma comment(lib, "Dbghelp.lib")
 
 namespace CrashHandler
 {
@@ -36,6 +37,13 @@ namespace CrashHandler
     inline SignalHandlerFn s_prevSigFpe = SIG_DFL;
     inline SignalHandlerFn s_prevSigSegv = SIG_DFL;
     inline SignalHandlerFn s_prevSigTerm = SIG_DFL;
+    inline BYTE s_setUnhandledFilterBackup[5]{};
+    inline BYTE* s_setUnhandledFilterTarget = nullptr;
+    inline bool s_setUnhandledFilterPatched = false;
+    inline bool s_mirageSymbolsLoaded = false;
+    inline DWORD s_lastVectoredCode = 0;
+    inline uintptr_t s_lastVectoredPc = 0;
+    inline DWORD s_lastVectoredTick = 0;
 
     enum class AddressSpace
     {
@@ -119,6 +127,56 @@ namespace CrashHandler
         CloseHandle(hFile);
     }
 
+    inline bool PatchSetUnhandledExceptionFilter()
+    {
+        if (s_setUnhandledFilterPatched)
+            return true;
+
+        HMODULE kernel32 = GetModuleHandleA("kernel32.dll");
+        if (!kernel32)
+            return false;
+
+        auto* target = reinterpret_cast<BYTE*>(GetProcAddress(kernel32, "SetUnhandledExceptionFilter"));
+        if (!target)
+            return false;
+
+        static const BYTE patch[5] = { 0x33, 0xC0, 0xC2, 0x04, 0x00 };
+
+        DWORD oldProtect = 0;
+        if (!VirtualProtect(target, sizeof(patch), PAGE_EXECUTE_READWRITE, &oldProtect))
+            return false;
+
+        std::memcpy(s_setUnhandledFilterBackup, target, sizeof(patch));
+        std::memcpy(target, patch, sizeof(patch));
+        FlushInstructionCache(GetCurrentProcess(), target, sizeof(patch));
+
+        DWORD restoreProtect = 0;
+        VirtualProtect(target, sizeof(patch), oldProtect, &restoreProtect);
+
+        s_setUnhandledFilterTarget = target;
+        s_setUnhandledFilterPatched = true;
+        return true;
+    }
+
+    inline void UnpatchSetUnhandledExceptionFilter()
+    {
+        if (!s_setUnhandledFilterPatched || !s_setUnhandledFilterTarget)
+            return;
+
+        DWORD oldProtect = 0;
+        if (!VirtualProtect(s_setUnhandledFilterTarget, sizeof(s_setUnhandledFilterBackup), PAGE_EXECUTE_READWRITE, &oldProtect))
+            return;
+
+        std::memcpy(s_setUnhandledFilterTarget, s_setUnhandledFilterBackup, sizeof(s_setUnhandledFilterBackup));
+        FlushInstructionCache(GetCurrentProcess(), s_setUnhandledFilterTarget, sizeof(s_setUnhandledFilterBackup));
+
+        DWORD restoreProtect = 0;
+        VirtualProtect(s_setUnhandledFilterTarget, sizeof(s_setUnhandledFilterBackup), oldProtect, &restoreProtect);
+
+        s_setUnhandledFilterTarget = nullptr;
+        s_setUnhandledFilterPatched = false;
+    }
+
     inline uint32_t ReadImageSizeFromBase(uintptr_t imageBase)
     {
         if (!imageBase)
@@ -145,12 +203,14 @@ namespace CrashHandler
     {
         s_mirageBase = imageBase;
         s_mirageSize = imageSize ? imageSize : ReadImageSizeFromBase(imageBase);
+        s_mirageSymbolsLoaded = false;
     }
 
     inline void ClearMirageImageInfo()
     {
         s_mirageBase = 0;
         s_mirageSize = 0;
+        s_mirageSymbolsLoaded = false;
     }
 
     inline bool IsAddressInRange(uintptr_t addr, uintptr_t imageBase, uint32_t imageSize)
@@ -247,6 +307,171 @@ namespace CrashHandler
             s_symbolsInitialized = true;
     }
 
+    inline void BuildMirageModulePath(char* out, size_t outSize)
+    {
+        if (!out || outSize == 0)
+            return;
+        out[0] = '\0';
+
+        if (!mapped_image_dir.empty())
+        {
+            const std::string baseDir = CvWideToAnsi(mapped_image_dir);
+            if (!baseDir.empty())
+            {
+                sprintf_s(out, outSize, "%s\\MirageAgent.dll", baseDir.c_str());
+                return;
+            }
+        }
+    }
+
+    inline void EnsureMirageSymbols()
+    {
+        if (s_mirageSymbolsLoaded || !s_mirageBase || !s_mirageSize)
+            return;
+
+        EnsureSymbols();
+        if (!s_symbolsInitialized || !s_process)
+            return;
+
+        if (SymGetModuleBase64(s_process, static_cast<DWORD64>(s_mirageBase)) == static_cast<DWORD64>(s_mirageBase))
+        {
+            s_mirageSymbolsLoaded = true;
+            return;
+        }
+
+        char modulePath[MAX_PATH]{};
+        BuildMirageModulePath(modulePath, sizeof(modulePath));
+        if (!modulePath[0])
+            return;
+
+        if (SymLoadModuleEx(
+            s_process,
+            nullptr,
+            modulePath,
+            "MirageAgent(mmap)",
+            static_cast<DWORD64>(s_mirageBase),
+            s_mirageSize,
+            nullptr,
+            0))
+        {
+            s_mirageSymbolsLoaded = true;
+        }
+    }
+
+    inline char LowerAscii(char c)
+    {
+        if (c >= 'A' && c <= 'Z')
+            return static_cast<char>(c - 'A' + 'a');
+        return c;
+    }
+
+    inline bool IsPathSeparator(char c)
+    {
+        return c == '\\' || c == '/';
+    }
+
+    inline bool PathEndsWithInsensitive(const char* path, const char* suffix)
+    {
+        if (!path || !suffix)
+            return false;
+
+        const size_t pathLen = std::strlen(path);
+        const size_t suffixLen = std::strlen(suffix);
+        if (suffixLen > pathLen)
+            return false;
+
+        const char* start = path + (pathLen - suffixLen);
+        for (size_t i = 0; i < suffixLen; ++i)
+        {
+            const char a = start[i];
+            const char b = suffix[i];
+            if (IsPathSeparator(a) && IsPathSeparator(b))
+                continue;
+            if (LowerAscii(a) != LowerAscii(b))
+                return false;
+        }
+
+        return true;
+    }
+
+    struct VectoredSourceWhitelistEntry
+    {
+        const char* fileSuffix;
+        DWORD lineStart;
+        DWORD lineEnd;
+    };
+
+    inline bool IsFatalException(DWORD code);
+
+    inline bool IsMirageVectoredWhitelistHit(uintptr_t pc)
+    {
+        if (!IsMirageAddress(pc))
+            return false;
+
+        EnsureMirageSymbols();
+        if (!s_mirageSymbolsLoaded)
+            return false;
+
+        IMAGEHLP_LINE64 line{};
+        line.SizeOfStruct = sizeof(line);
+        DWORD displacement = 0;
+        if (!SymGetLineFromAddr64(s_process, static_cast<DWORD64>(pc), &displacement, &line) || !line.FileName)
+            return false;
+
+        static const VectoredSourceWhitelistEntry whitelist[] = {
+            { "MirageAgent\\BreakPoint.h", 42, 60 },
+            { "MirageAgent\\Utils\\Hooking.h", 9, 87 },
+            { "MirageAgent\\Utils\\LuaCommands.h", 233, 237 },
+            { "MirageAgent\\Utils\\NetPackets.h", 221, 225 },
+            { "MirageAgent\\Utils\\NetPackets.h", 346, 364 },
+            { "MirageAgent\\Utils\\NetPackets.h", 376, 382 },
+            { "MirageAgent\\LuaInjector.h", 445, 468 },
+            { "MirageAgent\\dllmain.cpp", 54, 66 },
+            { "MirageAgent\\Utils\\ImGuiIntegration.h", 706, 775 },
+        };
+
+        for (const auto& entry : whitelist)
+        {
+            if (!PathEndsWithInsensitive(line.FileName, entry.fileSuffix))
+                continue;
+            if (line.LineNumber >= entry.lineStart && line.LineNumber <= entry.lineEnd)
+                return true;
+        }
+
+        return false;
+    }
+
+    inline bool ShouldLogVectoredMirageException(PEXCEPTION_POINTERS ep)
+    {
+        if (!ep || !ep->ExceptionRecord || !ep->ContextRecord)
+            return false;
+
+        const DWORD code = ep->ExceptionRecord->ExceptionCode;
+        if (!IsFatalException(code))
+            return false;
+
+        const uintptr_t pc = static_cast<uintptr_t>(ep->ContextRecord->Eip);
+        const uintptr_t faultAddr = reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress);
+        if (!IsMirageAddress(pc) && !IsMirageAddress(faultAddr))
+            return false;
+
+        if (IsMirageVectoredWhitelistHit(pc))
+            return false;
+
+        const DWORD now = GetTickCount();
+        if (s_lastVectoredCode == code && s_lastVectoredPc == pc)
+        {
+            const DWORD delta = now - s_lastVectoredTick;
+            if (delta < 750)
+                return false;
+        }
+
+        s_lastVectoredCode = code;
+        s_lastVectoredPc = pc;
+        s_lastVectoredTick = now;
+        return true;
+    }
+
     inline void DescribeAddress(uintptr_t addr, char* out, size_t outSize)
     {
         if (!out || outSize == 0)
@@ -260,6 +485,7 @@ namespace CrashHandler
 
         if (space == AddressSpace::MirageImage)
         {
+            EnsureMirageSymbols();
             moduleBase = static_cast<DWORD64>(s_mirageBase);
             if (GetModuleFileNameA(reinterpret_cast<HMODULE>(s_mirageBase), modulePath, MAX_PATH))
                 moduleName = BaseName(modulePath);
@@ -288,29 +514,36 @@ namespace CrashHandler
         symbol->MaxNameLen = MAX_SYM_NAME;
         DWORD64 displacement = 0;
         const bool hasSymbol = SymFromAddr(s_process, static_cast<DWORD64>(addr), &displacement, symbol) == TRUE;
+        IMAGEHLP_LINE64 sourceLine{};
+        sourceLine.SizeOfStruct = sizeof(sourceLine);
+        DWORD lineDisplacement = 0;
+        const bool hasLine = SymGetLineFromAddr64(s_process, static_cast<DWORD64>(addr), &lineDisplacement, &sourceLine) == TRUE && sourceLine.FileName != nullptr;
+        char lineSuffix[512]{};
+        if (hasLine)
+            sprintf_s(lineSuffix, sizeof(lineSuffix), " [File %s:%lu]", sourceLine.FileName, static_cast<unsigned long>(sourceLine.LineNumber));
 
         if (space == AddressSpace::MainModule)
         {
             const uint32_t rva = RuntimeToMainRva(addr);
             const uint32_t idaAddr = RuntimeToIda(addr);
             if (hasSymbol)
-                sprintf_s(out, outSize, "%s!%s+0x%llX [RVA 0x%08X] [IDA 0x%08X]", moduleName, symbol->Name, static_cast<unsigned long long>(displacement), rva, idaAddr);
+                sprintf_s(out, outSize, "%s!%s+0x%llX [RVA 0x%08X] [IDA 0x%08X]%s", moduleName, symbol->Name, static_cast<unsigned long long>(displacement), rva, idaAddr, lineSuffix);
             else
-                sprintf_s(out, outSize, "%s+0x%llX [RVA 0x%08X] [IDA 0x%08X]", moduleName, static_cast<unsigned long long>(addr - static_cast<uintptr_t>(moduleBase)), rva, idaAddr);
+                sprintf_s(out, outSize, "%s+0x%llX [RVA 0x%08X] [IDA 0x%08X]%s", moduleName, static_cast<unsigned long long>(addr - static_cast<uintptr_t>(moduleBase)), rva, idaAddr, lineSuffix);
         }
         else if (space == AddressSpace::MirageImage)
         {
             if (hasSymbol)
-                sprintf_s(out, outSize, "%s!%s+0x%llX [RVA 0x%08X]", moduleName, symbol->Name, static_cast<unsigned long long>(displacement), RuntimeToMirageRva(addr));
+                sprintf_s(out, outSize, "%s!%s+0x%llX [RVA 0x%08X]%s", moduleName, symbol->Name, static_cast<unsigned long long>(displacement), RuntimeToMirageRva(addr), lineSuffix);
             else
-                sprintf_s(out, outSize, "%s+0x%llX [RVA 0x%08X]", moduleName, static_cast<unsigned long long>(addr - s_mirageBase), RuntimeToMirageRva(addr));
+                sprintf_s(out, outSize, "%s+0x%llX [RVA 0x%08X]%s", moduleName, static_cast<unsigned long long>(addr - s_mirageBase), RuntimeToMirageRva(addr), lineSuffix);
         }
         else
         {
             if (hasSymbol)
-                sprintf_s(out, outSize, "%s!%s+0x%llX", moduleName, symbol->Name, static_cast<unsigned long long>(displacement));
+                sprintf_s(out, outSize, "%s!%s+0x%llX%s", moduleName, symbol->Name, static_cast<unsigned long long>(displacement), lineSuffix);
             else if (moduleBase)
-                sprintf_s(out, outSize, "%s+0x%llX", moduleName, static_cast<unsigned long long>(addr - static_cast<uintptr_t>(moduleBase)));
+                sprintf_s(out, outSize, "%s+0x%llX%s", moduleName, static_cast<unsigned long long>(addr - static_cast<uintptr_t>(moduleBase)), lineSuffix);
             else
                 sprintf_s(out, outSize, "0x%08X", static_cast<unsigned int>(addr));
         }
@@ -509,6 +742,13 @@ namespace CrashHandler
         return EXCEPTION_EXECUTE_HANDLER;
     }
 
+    inline LONG WriteCrashReportRecoverable(const char* reason, DWORD code, uintptr_t faultAddr, const CONTEXT& ctx)
+    {
+        LONG result = WriteCrashReport(reason, code, faultAddr, ctx);
+        InterlockedExchange(&s_inCrashHandler, 0);
+        return result;
+    }
+
     inline void HardTerminate(UINT exitCode)
     {
         TerminateProcess(GetCurrentProcess(), exitCode);
@@ -568,10 +808,18 @@ namespace CrashHandler
         if (!ep || !ep->ExceptionRecord || !ep->ContextRecord)
             return EXCEPTION_CONTINUE_SEARCH;
 
-        if (!IsSilentCrashException(ep->ExceptionRecord->ExceptionCode))
+        const DWORD code = ep->ExceptionRecord->ExceptionCode;
+        const uintptr_t faultAddr = reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress);
+        if (IsSilentCrashException(code))
+        {
+            WriteCrashReportRecoverable("Vectored fatal exit", code, faultAddr, *ep->ContextRecord);
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+
+        if (!ShouldLogVectoredMirageException(ep))
             return EXCEPTION_CONTINUE_SEARCH;
 
-        WriteCrashReport("Vectored fatal exit", ep->ExceptionRecord->ExceptionCode, reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress), *ep->ContextRecord);
+        WriteCrashReportRecoverable("Vectored fatal exception", code, faultAddr, *ep->ContextRecord);
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
@@ -604,6 +852,10 @@ namespace CrashHandler
         s_prevSigSegv = std::signal(SIGSEGV, SignalCrashHandler);
         s_prevSigTerm = std::signal(SIGTERM, SignalCrashHandler);
         s_prevFilter = SetUnhandledExceptionFilter(UnhandledFilter);
+        if (PatchSetUnhandledExceptionFilter())
+            AppendLog("[CrashHandler] SetUnhandledExceptionFilter protected.\n");
+        else
+            AppendLog("[CrashHandler] Failed to protect SetUnhandledExceptionFilter.\n");
         AppendLog("[CrashHandler] Installed.\n");
         if (s_mirageBase && s_mirageSize)
             AppendLog("[CrashHandler] Mirage image tracked at VA 0x%08X size 0x%08X.\n", static_cast<unsigned int>(s_mirageBase), s_mirageSize);
@@ -630,6 +882,7 @@ namespace CrashHandler
         std::signal(SIGFPE, s_prevSigFpe);
         std::signal(SIGSEGV, s_prevSigSegv);
         std::signal(SIGTERM, s_prevSigTerm);
+        UnpatchSetUnhandledExceptionFilter();
         SetUnhandledExceptionFilter(s_prevFilter);
         s_prevFilter = nullptr;
         ClearMirageImageInfo();

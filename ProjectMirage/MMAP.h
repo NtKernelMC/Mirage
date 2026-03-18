@@ -42,6 +42,7 @@ struct MIRAGE_MMAP_CONTEXT
 };
 
 
-//Note: Exception support only x64 with build params /EHa or /EHc
+// x64 registers unwind data via RtlAddFunctionTable.
+// x86 stealth manual map supports SEH only for images built without /SAFESEH.
 bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeader = true, bool ClearNonNeededSections = true, bool AdjustProtections = true, bool SEHExceptionSupport = true, DWORD fdwReason = DLL_PROCESS_ATTACH, LPVOID lpReserved = 0);
 void __stdcall Shellcode(MANUAL_MAPPING_DATA* pData);

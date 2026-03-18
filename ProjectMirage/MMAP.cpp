@@ -12,6 +12,62 @@
 #define CURRENT_ARCH IMAGE_FILE_MACHINE_I386
 #endif
 
+static BYTE* RvaToPointer(BYTE* pSrcData, SIZE_T FileSize, IMAGE_NT_HEADERS* pNtHeader, DWORD rva, SIZE_T size)
+{
+	if (!pSrcData || !pNtHeader || !rva || !size)
+		return nullptr;
+
+	const auto* pOptHeader = &pNtHeader->OptionalHeader;
+	const SIZE_T rvaStart = static_cast<SIZE_T>(rva);
+	const SIZE_T rvaEnd = rvaStart + size;
+	if (rvaEnd < rvaStart)
+		return nullptr;
+
+	if (rva < pOptHeader->SizeOfHeaders)
+	{
+		if (rvaEnd > FileSize)
+			return nullptr;
+		return pSrcData + rvaStart;
+	}
+
+	auto* pSectionHeader = IMAGE_FIRST_SECTION(pNtHeader);
+	for (UINT i = 0; i != pNtHeader->FileHeader.NumberOfSections; ++i, ++pSectionHeader)
+	{
+		const DWORD sectionSize = pSectionHeader->Misc.VirtualSize ? pSectionHeader->Misc.VirtualSize : pSectionHeader->SizeOfRawData;
+		const SIZE_T sectionStart = static_cast<SIZE_T>(pSectionHeader->VirtualAddress);
+		const SIZE_T sectionEnd = sectionStart + static_cast<SIZE_T>(sectionSize);
+		if (sectionEnd < sectionStart)
+			continue;
+		if (rvaStart < sectionStart || rvaEnd > sectionEnd)
+			continue;
+
+		const SIZE_T rawOffset = static_cast<SIZE_T>(pSectionHeader->PointerToRawData) + (rvaStart - sectionStart);
+		const SIZE_T rawEnd = rawOffset + size;
+		if (rawEnd < rawOffset || rawEnd > FileSize)
+			return nullptr;
+
+		return pSrcData + rawOffset;
+	}
+
+	return nullptr;
+}
+
+#ifndef _WIN64
+static bool HasSafeSEHTable(BYTE* pSrcData, SIZE_T FileSize, IMAGE_NT_HEADERS* pNtHeader)
+{
+	const auto& loadConfigDir = pNtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG];
+	if (!loadConfigDir.VirtualAddress || !loadConfigDir.Size)
+		return false;
+
+	auto* pLoadConfig = reinterpret_cast<IMAGE_LOAD_CONFIG_DIRECTORY32*>(
+		RvaToPointer(pSrcData, FileSize, pNtHeader, loadConfigDir.VirtualAddress, sizeof(IMAGE_LOAD_CONFIG_DIRECTORY32)));
+	if (!pLoadConfig)
+		return false;
+
+	return pLoadConfig->SEHandlerTable != 0 && pLoadConfig->SEHandlerCount != 0;
+}
+#endif
+
 bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeader, bool ClearNonNeededSections, bool AdjustProtections, bool SEHExceptionSupport, DWORD fdwReason, LPVOID lpReserved)
 {
 	IMAGE_NT_HEADERS* pOldNtHeader = nullptr;
@@ -34,6 +90,15 @@ bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeade
 		return false;
 	}
 
+#ifndef _WIN64
+	const bool imageHasSafeSEH = HasSafeSEHTable(pSrcData, FileSize, pOldNtHeader);
+	if (SEHExceptionSupport && imageHasSafeSEH)
+	{
+		printf("Error: x86 stealth manual map does not support /SAFESEH images. Rebuild the DLL with /SAFESEH:NO.\n");
+		return false;
+	}
+#endif
+
 	pTargetBase = reinterpret_cast<BYTE*>(VirtualAllocEx(hProc, nullptr, pOldOptHeader->SizeOfImage, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
 	if (!pTargetBase)
 	{
@@ -49,8 +114,6 @@ bool ManualMapDll(HANDLE hProc, BYTE* pSrcData, SIZE_T FileSize, bool ClearHeade
 	data.pGetProcAddress = GetProcAddress;
 #ifdef _WIN64
 	data.pRtlAddFunctionTable = (f_RtlAddFunctionTable)RtlAddFunctionTable;
-#else 
-	SEHExceptionSupport = false;
 #endif
 	data.pbase = pTargetBase;
 	data.fdwReasonParam = fdwReason;

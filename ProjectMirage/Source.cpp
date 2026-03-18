@@ -23,7 +23,7 @@ BOOL InjectDLL(HANDLE hProcess, DWORD processPID, std::wstring filePath)
 
     if (mirage.dll_injection_type == DllInjectionType::MMAP)
     {
-        if (!ManualMapDll(hProcess, buffer.data(), static_cast<SIZE_T>(fileSize), false, false, false, false))
+        if (!ManualMapDll(hProcess, buffer.data(), static_cast<SIZE_T>(fileSize), false, false, false, true))
         {
             LogInFile(LOG_NAME, xorstr_("Failed to inject %ls\n"), filePath.c_str());
             return FALSE;
@@ -116,7 +116,7 @@ void SetMirageDirs()
 }
 int main()
 {
-	SetConsoleTitleA(xorstr_("Mirage Injector V6.7 by DroidZero"));
+	SetConsoleTitleA(xorstr_("Mirage Injector V6.8 by DroidZero"));
 	SetConsoleOutputCP(CP_UTF8);
 	SetConsoleCP(CP_UTF8);
 	if (!setlocale(LC_ALL, ".UTF-8"))

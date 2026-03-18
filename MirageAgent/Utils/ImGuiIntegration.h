@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
+#include <cstdarg>
 
 #pragma comment(lib, "d3d9.lib")
 #pragma comment(lib, "d3dx9.lib")
@@ -13,12 +14,17 @@
 #include "../third_party/imgui/backends/imgui_impl_dx9.h"
 #include "../third_party/imgui/backends/imgui_impl_win32.h"
 #include "../third_party/ImGuiColorTextEdit/TextEditor.h"
+#include "../CrashHandler.h"
 
 // imgui_impl_win32.h intentionally keeps WndProc declaration commented out.
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 using PresentSignature = HRESULT(__stdcall*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*);
 using ResetSignature = HRESULT(__stdcall*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
+using Direct3DCreate9Signature = IDirect3D9* (WINAPI*)(UINT);
+using Direct3DCreate9ExSignature = HRESULT(WINAPI*)(UINT, IDirect3D9Ex**);
+using CreateDeviceSignature = HRESULT(STDMETHODCALLTYPE*)(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*, IDirect3DDevice9**);
+using CreateDeviceExSignature = HRESULT(STDMETHODCALLTYPE*)(IDirect3D9Ex*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*, D3DDISPLAYMODEEX*, IDirect3DDevice9Ex**);
 
 enum class ImGuiLuaCommandType
 {
@@ -123,6 +129,7 @@ public:
 
         slot_ = slot_ptr;
         original_ = *slot_ptr;
+        detour_ = detour;
         *slot_ptr = detour;
 
         DWORD restore = 0;
@@ -133,17 +140,24 @@ public:
     void remove()
     {
         if (!slot_ || !original_)
+        {
+            slot_ = nullptr;
+            original_ = nullptr;
+            detour_ = nullptr;
             return;
+        }
 
         DWORD old = 0;
         if (VirtualProtect(slot_, sizeof(void*), PAGE_EXECUTE_READWRITE, &old))
         {
-            *slot_ = original_;
+            if (*slot_ == detour_)
+                *slot_ = original_;
             DWORD restore = 0;
             VirtualProtect(slot_, sizeof(void*), old, &restore);
         }
         slot_ = nullptr;
         original_ = nullptr;
+        detour_ = nullptr;
     }
 
     template <typename T>
@@ -155,6 +169,7 @@ public:
 private:
     void** slot_ = nullptr;
     void* original_ = nullptr;
+    void* detour_ = nullptr;
 };
 
 static std::atomic_bool g_imgui_hooks_installed = false;
@@ -199,6 +214,34 @@ static ResetSignature g_reset_original = nullptr;
 
 static bool g_cursor_visible_by_imgui = false;
 static std::atomic_bool g_imgui_hook_thread_running = false;
+static std::atomic_bool g_imgui_hook_thread_stop_requested = false;
+static std::atomic_uint g_imgui_dx9_hook_fail_count = 0;
+static std::atomic<DWORD> g_imgui_dx9_hook_last_fail_log = 0;
+static std::atomic_bool g_imgui_d3d_factory_hooks_installed = false;
+static HMODULE g_imgui_d3d9_module = nullptr;
+static void* g_imgui_direct3d_create9_target = nullptr;
+static void* g_imgui_direct3d_create9ex_target = nullptr;
+static void* g_imgui_create_device_target = nullptr;
+static void* g_imgui_create_device_ex_target = nullptr;
+static Direct3DCreate9Signature g_imgui_direct3d_create9_original = nullptr;
+static Direct3DCreate9ExSignature g_imgui_direct3d_create9ex_original = nullptr;
+static CreateDeviceSignature g_imgui_create_device_original = nullptr;
+static CreateDeviceExSignature g_imgui_create_device_ex_original = nullptr;
+static void** g_imgui_present_slot = nullptr;
+static void** g_imgui_reset_slot = nullptr;
+
+static bool InstallDx9Hooks();
+static bool ImGuiInstallD3DFactoryHooks();
+static bool ImGuiInstallCreateDeviceHooks(IDirect3D9* direct3d);
+static bool ImGuiInstallCreateDeviceExHook(IDirect3D9Ex* direct3d_ex);
+static void ImGuiRememberDx9Device(IDirect3DDevice9* device);
+static IDirect3D9* WINAPI ImGuiDirect3DCreate9Hook(UINT sdk_version);
+static HRESULT WINAPI ImGuiDirect3DCreate9ExHook(UINT sdk_version, IDirect3D9Ex** direct3d_ex);
+static HRESULT STDMETHODCALLTYPE ImGuiCreateDeviceHook(IDirect3D9* direct3d, UINT adapter, D3DDEVTYPE device_type, HWND focus_window,
+    DWORD behavior_flags, D3DPRESENT_PARAMETERS* presentation_parameters, IDirect3DDevice9** returned_device);
+static HRESULT STDMETHODCALLTYPE ImGuiCreateDeviceExHook(IDirect3D9Ex* direct3d, UINT adapter, D3DDEVTYPE device_type, HWND focus_window,
+    DWORD behavior_flags, D3DPRESENT_PARAMETERS* presentation_parameters, D3DDISPLAYMODEEX* fullscreen_display_mode,
+    IDirect3DDevice9Ex** returned_device);
 
 static inline bool ImGuiIsLuaRenderAllowed()
 {
@@ -418,50 +461,285 @@ static void ImGuiDrawCustomCursor()
     draw->AddLine(c, ImVec2(p.x + 9.0f, p.y + 25.0f), outline, 1.0f);
 }
 
-static std::uintptr_t find_device(std::uint32_t len)
+static void ImGuiResetDx9HookFailureState()
 {
-    static std::uintptr_t base = [len]() -> std::uintptr_t
+    const unsigned int failed_attempts = g_imgui_dx9_hook_fail_count.exchange(0);
+    g_imgui_dx9_hook_last_fail_log = 0;
+    if (failed_attempts > 0)
+        LogInFile(LOG_NAME, xorstr_("[LOG] DX9 hook install recovered after %u failed attempts.\n"), failed_attempts);
+}
+
+static void ImGuiLogDx9HookFailure(const char* format, ...)
+{
+    const unsigned int fail_count = g_imgui_dx9_hook_fail_count.fetch_add(1) + 1;
+    const DWORD now = GetTickCount();
+    const DWORD last = g_imgui_dx9_hook_last_fail_log.load();
+
+    if (fail_count > 1 && (fail_count % 20) != 0 && last != 0 && (now - last) < 3000)
+        return;
+
+    char message[512]{};
+    va_list args;
+    va_start(args, format);
+    vsnprintf_s(message, sizeof(message), _TRUNCATE, format, args);
+    va_end(args);
+
+    g_imgui_dx9_hook_last_fail_log = now;
+    LogInFile(LOG_NAME, xorstr_("[WARN] DX9 hook install attempt %u failed: %s\n"), fail_count, message);
+}
+
+static bool ImGuiEnsureMinHook(void* target, void* detour, void** original, const char* name)
+{
+    MH_STATUS status = MH_CreateHook(target, detour, reinterpret_cast<LPVOID*>(original));
+    if (status != MH_OK && status != MH_ERROR_ALREADY_CREATED)
     {
-        std::string path_to(MAX_PATH, '\0');
-        UINT size = GetSystemDirectoryA(path_to.data(), MAX_PATH);
-        if (!size)
-            return std::uintptr_t(0);
+        ImGuiLogDx9HookFailure("MH_CreateHook failed for %s (status=%d, target=%p)", name, status, target);
+        return false;
+    }
 
-        path_to.resize(size);
-        path_to += "\\d3d9.dll";
+    status = MH_EnableHook(target);
+    if (status != MH_OK && status != MH_ERROR_ENABLED)
+    {
+        ImGuiLogDx9HookFailure("MH_EnableHook failed for %s (status=%d, target=%p)", name, status, target);
+        return false;
+    }
 
-        HMODULE d3d_module = GetModuleHandleA(path_to.c_str());
-        if (!d3d_module)
-            d3d_module = LoadLibraryA(path_to.c_str());
-        if (!d3d_module)
-            return std::uintptr_t(0);
+    return true;
+}
 
-        const auto module_base = reinterpret_cast<std::uintptr_t>(d3d_module);
-        const auto scan_end = module_base + len;
+static void ImGuiRemoveMinHook(void*& target)
+{
+    if (!target)
+        return;
 
-        for (std::uintptr_t current = module_base; current < scan_end; ++current)
+    MH_DisableHook(target);
+    MH_RemoveHook(target);
+    target = nullptr;
+}
+
+static void ImGuiRememberDx9Device(IDirect3DDevice9* device)
+{
+    if (!device)
+        return;
+
+    void** table = *reinterpret_cast<void***>(device);
+    if (!table)
+        return;
+
+    const bool changed = g_imgui_device != device;
+    g_imgui_device = device;
+    g_imgui_present_slot = &table[17];
+    g_imgui_reset_slot = &table[16];
+
+    if (changed)
+        LogInFile(LOG_NAME, xorstr_("[LOG] DX9 device captured: %p\n"), device);
+}
+
+static bool ImGuiInstallCreateDeviceHooks(IDirect3D9* direct3d)
+{
+    if (!direct3d)
+        return false;
+
+    void** table = *reinterpret_cast<void***>(direct3d);
+    if (!table)
+    {
+        ImGuiLogDx9HookFailure("IDirect3D9 vtable is null while installing CreateDevice hook");
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_imgui_hook_state_mutex);
+
+    void* create_device_target = table[16];
+    if (!create_device_target)
+    {
+        ImGuiLogDx9HookFailure("CreateDevice slot is null");
+        return false;
+    }
+
+    if (g_imgui_create_device_target == create_device_target && g_imgui_create_device_original)
+        return true;
+
+    if (g_imgui_create_device_target && g_imgui_create_device_target != create_device_target)
+    {
+        ImGuiRemoveMinHook(g_imgui_create_device_target);
+        g_imgui_create_device_original = nullptr;
+    }
+
+    if (!ImGuiEnsureMinHook(create_device_target, reinterpret_cast<void*>(&ImGuiCreateDeviceHook),
+        reinterpret_cast<void**>(&g_imgui_create_device_original), "IDirect3D9::CreateDevice"))
+        return false;
+
+    g_imgui_create_device_target = create_device_target;
+    LogInFile(LOG_NAME, xorstr_("[LOG] DX9 CreateDevice hook installed.\n"));
+    return true;
+}
+
+static bool ImGuiInstallCreateDeviceExHook(IDirect3D9Ex* direct3d_ex)
+{
+    if (!direct3d_ex)
+        return true;
+
+    void** table = *reinterpret_cast<void***>(direct3d_ex);
+    if (!table)
+    {
+        ImGuiLogDx9HookFailure("IDirect3D9Ex vtable is null while installing CreateDeviceEx hook");
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_imgui_hook_state_mutex);
+
+    void* create_device_ex_target = table[20];
+    if (!create_device_ex_target)
+    {
+        ImGuiLogDx9HookFailure("CreateDeviceEx slot is null");
+        return false;
+    }
+
+    if (g_imgui_create_device_ex_target == create_device_ex_target && g_imgui_create_device_ex_original)
+        return true;
+
+    if (g_imgui_create_device_ex_target && g_imgui_create_device_ex_target != create_device_ex_target)
+    {
+        ImGuiRemoveMinHook(g_imgui_create_device_ex_target);
+        g_imgui_create_device_ex_original = nullptr;
+    }
+
+    if (!ImGuiEnsureMinHook(create_device_ex_target, reinterpret_cast<void*>(&ImGuiCreateDeviceExHook),
+        reinterpret_cast<void**>(&g_imgui_create_device_ex_original), "IDirect3D9Ex::CreateDeviceEx"))
+        return false;
+
+    g_imgui_create_device_ex_target = create_device_ex_target;
+    LogInFile(LOG_NAME, xorstr_("[LOG] DX9 CreateDeviceEx hook installed.\n"));
+    return true;
+}
+
+static IDirect3D9* WINAPI ImGuiDirect3DCreate9Hook(UINT sdk_version)
+{
+    IDirect3D9* direct3d = g_imgui_direct3d_create9_original ? g_imgui_direct3d_create9_original(sdk_version) : nullptr;
+    if (direct3d)
+        ImGuiInstallCreateDeviceHooks(direct3d);
+    return direct3d;
+}
+
+static HRESULT WINAPI ImGuiDirect3DCreate9ExHook(UINT sdk_version, IDirect3D9Ex** direct3d_ex)
+{
+    HRESULT result = g_imgui_direct3d_create9ex_original ? g_imgui_direct3d_create9ex_original(sdk_version, direct3d_ex) : D3DERR_INVALIDCALL;
+    if (SUCCEEDED(result) && direct3d_ex && *direct3d_ex)
+    {
+        ImGuiInstallCreateDeviceHooks(*direct3d_ex);
+        ImGuiInstallCreateDeviceExHook(*direct3d_ex);
+    }
+    return result;
+}
+
+static HRESULT STDMETHODCALLTYPE ImGuiCreateDeviceHook(IDirect3D9* direct3d, UINT adapter, D3DDEVTYPE device_type, HWND focus_window,
+    DWORD behavior_flags, D3DPRESENT_PARAMETERS* presentation_parameters, IDirect3DDevice9** returned_device)
+{
+    HRESULT result = g_imgui_create_device_original ?
+        g_imgui_create_device_original(direct3d, adapter, device_type, focus_window, behavior_flags, presentation_parameters, returned_device) :
+        D3DERR_INVALIDCALL;
+
+    if (SUCCEEDED(result) && returned_device && *returned_device)
+    {
+        ImGuiRememberDx9Device(*returned_device);
+        InstallDx9Hooks();
+    }
+
+    return result;
+}
+
+static HRESULT STDMETHODCALLTYPE ImGuiCreateDeviceExHook(IDirect3D9Ex* direct3d, UINT adapter, D3DDEVTYPE device_type, HWND focus_window,
+    DWORD behavior_flags, D3DPRESENT_PARAMETERS* presentation_parameters, D3DDISPLAYMODEEX* fullscreen_display_mode,
+    IDirect3DDevice9Ex** returned_device)
+{
+    HRESULT result = g_imgui_create_device_ex_original ?
+        g_imgui_create_device_ex_original(direct3d, adapter, device_type, focus_window, behavior_flags, presentation_parameters, fullscreen_display_mode, returned_device) :
+        D3DERR_INVALIDCALL;
+
+    if (SUCCEEDED(result) && returned_device && *returned_device)
+    {
+        ImGuiRememberDx9Device(*returned_device);
+        InstallDx9Hooks();
+    }
+
+    return result;
+}
+
+static bool ImGuiInstallD3DFactoryHooks()
+{
+    std::unique_lock<std::mutex> lock(g_imgui_hook_state_mutex);
+
+    if (g_imgui_d3d_factory_hooks_installed)
+        return true;
+
+    HMODULE d3d9_module = GetModuleHandleA(xorstr_("d3d9.dll"));
+    if (!d3d9_module)
+        return false;
+
+    void* direct3d_create9_target = reinterpret_cast<void*>(GetProcAddress(d3d9_module, xorstr_("Direct3DCreate9")));
+    if (!direct3d_create9_target)
+    {
+        ImGuiLogDx9HookFailure("GetProcAddress failed for Direct3DCreate9 (gle=%lu)", GetLastError());
+        return false;
+    }
+
+    if (!ImGuiEnsureMinHook(direct3d_create9_target, reinterpret_cast<void*>(&ImGuiDirect3DCreate9Hook),
+        reinterpret_cast<void**>(&g_imgui_direct3d_create9_original), "Direct3DCreate9"))
+        return false;
+
+    g_imgui_direct3d_create9_target = direct3d_create9_target;
+
+    void* direct3d_create9ex_target = reinterpret_cast<void*>(GetProcAddress(d3d9_module, xorstr_("Direct3DCreate9Ex")));
+    if (direct3d_create9ex_target)
+    {
+        if (!ImGuiEnsureMinHook(direct3d_create9ex_target, reinterpret_cast<void*>(&ImGuiDirect3DCreate9ExHook),
+            reinterpret_cast<void**>(&g_imgui_direct3d_create9ex_original), "Direct3DCreate9Ex"))
+            return false;
+
+        g_imgui_direct3d_create9ex_target = direct3d_create9ex_target;
+    }
+
+    g_imgui_d3d9_module = d3d9_module;
+    g_imgui_d3d_factory_hooks_installed = true;
+    lock.unlock();
+
+    if (g_imgui_direct3d_create9_original)
+    {
+        IDirect3D9* direct3d = g_imgui_direct3d_create9_original(D3D_SDK_VERSION);
+        if (direct3d)
         {
-            if (*reinterpret_cast<std::uint16_t*>(current + 0x00) == 0x06C7 &&
-                *reinterpret_cast<std::uint16_t*>(current + 0x06) == 0x8689 &&
-                *reinterpret_cast<std::uint16_t*>(current + 0x0C) == 0x8689)
-            {
-                return current + 2;
-            }
+            ImGuiInstallCreateDeviceHooks(direct3d);
+            direct3d->Release();
         }
+    }
 
-        return std::uintptr_t(0);
-    }();
+    if (g_imgui_direct3d_create9ex_original)
+    {
+        IDirect3D9Ex* direct3d_ex = nullptr;
+        if (SUCCEEDED(g_imgui_direct3d_create9ex_original(D3D_SDK_VERSION, &direct3d_ex)) && direct3d_ex)
+        {
+            ImGuiInstallCreateDeviceHooks(direct3d_ex);
+            ImGuiInstallCreateDeviceExHook(direct3d_ex);
+            direct3d_ex->Release();
+        }
+    }
 
-    return base;
+    LogInFile(LOG_NAME, xorstr_("[LOG] DX9 factory hooks installed (Direct3DCreate9/Ex).\n"));
+    return true;
 }
 
 static void** get_function_slot(int vtable_index)
 {
-    const auto device = find_device(0x128000);
-    if (!device)
+    if (vtable_index == 17 && g_imgui_present_slot)
+        return g_imgui_present_slot;
+
+    if (vtable_index == 16 && g_imgui_reset_slot)
+        return g_imgui_reset_slot;
+
+    if (!g_imgui_device)
         return nullptr;
 
-    void** table = *reinterpret_cast<void***>(device);
+    void** table = *reinterpret_cast<void***>(g_imgui_device);
     if (!table)
         return nullptr;
 
@@ -645,6 +923,136 @@ static bool ImGuiLuaTakePulse(const std::string& key)
     bool pulse = it->second;
     it->second = false;
     return pulse;
+}
+
+static LONG ImGuiHandleCodeEditorException(const char* stage, const char* key, PEXCEPTION_POINTERS ep)
+{
+    if (ep && ep->ExceptionRecord && ep->ContextRecord)
+    {
+        char reason[128]{};
+        sprintf_s(reason, sizeof(reason), "ImGui Lua editor %s exception", stage ? stage : "runtime");
+        CrashHandler::WriteCrashReportRecoverable(reason, ep->ExceptionRecord->ExceptionCode, reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress), *ep->ContextRecord);
+    }
+
+    LogInFile(LOG_NAME, xorstr_("[ERROR] ImGui Lua editor exception during %s. Render disabled.\n"), stage ? stage : "runtime");
+    ImGuiSetLuaRenderAllowed(false);
+
+    if (key && *key)
+        g_imgui_code_editors.erase(key);
+    else
+        g_imgui_code_editors.clear();
+
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+static void ImGuiInitLuaCodeEditorUnsafe(ImGuiCodeEditorState* state)
+{
+    if (!state)
+        return;
+
+    state->editor = std::make_unique<TextEditor>();
+    state->editor->SetLanguageDefinition(TextEditor::LanguageDefinition::Lua());
+    state->editor->SetShowWhitespaces(false);
+    state->editor->SetTabSize(4);
+    state->editor->SetHandleMouseInputs(true);
+    state->editor->SetHandleKeyboardInputs(true);
+    state->editor->SetImGuiChildIgnored(false);
+
+    auto palette = TextEditor::GetDarkPalette();
+    palette[(unsigned)TextEditor::PaletteIndex::Default] = IM_COL32(238, 238, 238, 255);
+    palette[(unsigned)TextEditor::PaletteIndex::Keyword] = IM_COL32(255, 208, 64, 255);
+    palette[(unsigned)TextEditor::PaletteIndex::Number] = IM_COL32(138, 206, 255, 255);
+    palette[(unsigned)TextEditor::PaletteIndex::String] = IM_COL32(146, 228, 128, 255);
+    palette[(unsigned)TextEditor::PaletteIndex::CharLiteral] = IM_COL32(146, 228, 128, 255);
+    palette[(unsigned)TextEditor::PaletteIndex::Comment] = IM_COL32(168, 116, 124, 255);
+    palette[(unsigned)TextEditor::PaletteIndex::MultiLineComment] = IM_COL32(168, 116, 124, 255);
+    palette[(unsigned)TextEditor::PaletteIndex::Punctuation] = IM_COL32(236, 176, 186, 255);
+    palette[(unsigned)TextEditor::PaletteIndex::Identifier] = IM_COL32(236, 236, 236, 255);
+    palette[(unsigned)TextEditor::PaletteIndex::Background] = IM_COL32(3, 3, 3, 245);
+    palette[(unsigned)TextEditor::PaletteIndex::Cursor] = IM_COL32(255, 235, 120, 255);
+    palette[(unsigned)TextEditor::PaletteIndex::Selection] = IM_COL32(112, 24, 36, 190);
+    palette[(unsigned)TextEditor::PaletteIndex::LineNumber] = IM_COL32(182, 84, 96, 220);
+    palette[(unsigned)TextEditor::PaletteIndex::CurrentLineFill] = IM_COL32(22, 6, 8, 210);
+    palette[(unsigned)TextEditor::PaletteIndex::CurrentLineFillInactive] = IM_COL32(14, 4, 6, 170);
+    palette[(unsigned)TextEditor::PaletteIndex::CurrentLineEdge] = IM_COL32(192, 44, 62, 255);
+    state->editor->SetPalette(palette);
+}
+
+static bool ImGuiInitLuaCodeEditorSafe(ImGuiCodeEditorState* state, const char* key)
+{
+    __try
+    {
+        ImGuiInitLuaCodeEditorUnsafe(state);
+        return true;
+    }
+    __except (ImGuiHandleCodeEditorException("init", key, GetExceptionInformation()))
+    {
+        return false;
+    }
+}
+
+static void ImGuiLuaCodeEditorSetTextUnsafe(ImGuiCodeEditorState* state, const std::string* text)
+{
+    if (!state || !state->editor || !text)
+        return;
+
+    state->editor->SetText(*text);
+    state->synced_text = *text;
+}
+
+static bool ImGuiLuaCodeEditorSetTextSafe(ImGuiCodeEditorState* state, const std::string* text, const char* key)
+{
+    __try
+    {
+        ImGuiLuaCodeEditorSetTextUnsafe(state, text);
+        return true;
+    }
+    __except (ImGuiHandleCodeEditorException("set text", key, GetExceptionInformation()))
+    {
+        return false;
+    }
+}
+
+static void ImGuiLuaCodeEditorRenderUnsafe(ImGuiCodeEditorState* state, const char* label, float width, float height)
+{
+    if (!state || !state->editor)
+        return;
+
+    state->editor->Render(label, ImVec2(width, height), true);
+}
+
+static bool ImGuiLuaCodeEditorRenderSafe(ImGuiCodeEditorState* state, const char* label, float width, float height, const char* key)
+{
+    __try
+    {
+        ImGuiLuaCodeEditorRenderUnsafe(state, label, width, height);
+        return true;
+    }
+    __except (ImGuiHandleCodeEditorException("render", key, GetExceptionInformation()))
+    {
+        return false;
+    }
+}
+
+static void ImGuiLuaCodeEditorGetTextUnsafe(ImGuiCodeEditorState* state, std::string* out)
+{
+    if (!state || !state->editor || !out)
+        return;
+
+    *out = state->editor->GetText();
+}
+
+static bool ImGuiLuaCodeEditorGetTextSafe(ImGuiCodeEditorState* state, std::string* out, const char* key)
+{
+    __try
+    {
+        ImGuiLuaCodeEditorGetTextUnsafe(state, out);
+        return true;
+    }
+    __except (ImGuiHandleCodeEditorException("get text", key, GetExceptionInformation()))
+    {
+        return false;
+    }
 }
 
 static void ImGuiLuaQueueCommand(ImGuiLuaCommand&& cmd)
@@ -1125,43 +1533,24 @@ static void ImGuiExecuteLuaQueue()
             ImGuiCodeEditorState& state = g_imgui_code_editors[cmd.key];
             if (!state.editor)
             {
-                state.editor = std::make_unique<TextEditor>();
-                state.editor->SetLanguageDefinition(TextEditor::LanguageDefinition::Lua());
-                state.editor->SetShowWhitespaces(false);
-                state.editor->SetTabSize(4);
-                state.editor->SetHandleMouseInputs(true);
-                state.editor->SetHandleKeyboardInputs(true);
-                state.editor->SetImGuiChildIgnored(false);
-
-                auto palette = TextEditor::GetDarkPalette();
-                palette[(unsigned)TextEditor::PaletteIndex::Default] = IM_COL32(238, 238, 238, 255);
-                palette[(unsigned)TextEditor::PaletteIndex::Keyword] = IM_COL32(255, 208, 64, 255);
-                palette[(unsigned)TextEditor::PaletteIndex::Number] = IM_COL32(138, 206, 255, 255);
-                palette[(unsigned)TextEditor::PaletteIndex::String] = IM_COL32(146, 228, 128, 255);
-                palette[(unsigned)TextEditor::PaletteIndex::CharLiteral] = IM_COL32(146, 228, 128, 255);
-                palette[(unsigned)TextEditor::PaletteIndex::Comment] = IM_COL32(168, 116, 124, 255);
-                palette[(unsigned)TextEditor::PaletteIndex::MultiLineComment] = IM_COL32(168, 116, 124, 255);
-                palette[(unsigned)TextEditor::PaletteIndex::Punctuation] = IM_COL32(236, 176, 186, 255);
-                palette[(unsigned)TextEditor::PaletteIndex::Identifier] = IM_COL32(236, 236, 236, 255);
-                palette[(unsigned)TextEditor::PaletteIndex::Background] = IM_COL32(3, 3, 3, 245);
-                palette[(unsigned)TextEditor::PaletteIndex::Cursor] = IM_COL32(255, 235, 120, 255);
-                palette[(unsigned)TextEditor::PaletteIndex::Selection] = IM_COL32(112, 24, 36, 190);
-                palette[(unsigned)TextEditor::PaletteIndex::LineNumber] = IM_COL32(182, 84, 96, 220);
-                palette[(unsigned)TextEditor::PaletteIndex::CurrentLineFill] = IM_COL32(22, 6, 8, 210);
-                palette[(unsigned)TextEditor::PaletteIndex::CurrentLineFillInactive] = IM_COL32(14, 4, 6, 170);
-                palette[(unsigned)TextEditor::PaletteIndex::CurrentLineEdge] = IM_COL32(192, 44, 62, 255);
-                state.editor->SetPalette(palette);
+                if (!ImGuiInitLuaCodeEditorSafe(&state, cmd.key.c_str()))
+                    break;
             }
 
             std::string wanted = ImGuiLuaReadString(cmd.key, cmd.payload);
             if (wanted != state.synced_text)
             {
-                state.editor->SetText(wanted);
-                state.synced_text = wanted;
+                if (!ImGuiLuaCodeEditorSetTextSafe(&state, &wanted, cmd.key.c_str()))
+                    break;
             }
 
-            state.editor->Render(cmd.label.c_str(), ImVec2(cmd.f1, cmd.f2), true);
-            std::string edited = state.editor->GetText();
+            if (!ImGuiLuaCodeEditorRenderSafe(&state, cmd.label.c_str(), cmd.f1, cmd.f2, cmd.key.c_str()))
+                break;
+
+            std::string edited;
+            if (!ImGuiLuaCodeEditorGetTextSafe(&state, &edited, cmd.key.c_str()))
+                break;
+
             if (edited != state.synced_text)
             {
                 state.synced_text = edited;
@@ -1465,6 +1854,7 @@ static bool InstallDx9Hooks()
 
     if (was_marked_installed)
     {
+        LogInFile(LOG_NAME, xorstr_("[WARN] DX9 vtable hooks look overwritten, attempting reinstall.\n"));
         g_present_vtbl_hook.remove();
         g_reset_vtbl_hook.remove();
         g_present_original = nullptr;
@@ -1478,18 +1868,23 @@ static bool InstallDx9Hooks()
         return false;
 
     if (!g_present_vtbl_hook.install(present_slot, reinterpret_cast<void*>(&ImGuiPresentHook)))
+    {
+        ImGuiLogDx9HookFailure("failed to patch Present slot %p (gle=%lu)", present_slot, GetLastError());
         return false;
+    }
     g_present_original = g_present_vtbl_hook.original<PresentSignature>();
 
     if (!g_reset_vtbl_hook.install(reset_slot, reinterpret_cast<void*>(&ImGuiResetHook)))
     {
         g_present_vtbl_hook.remove();
         g_present_original = nullptr;
+        ImGuiLogDx9HookFailure("failed to patch Reset slot %p (gle=%lu)", reset_slot, GetLastError());
         return false;
     }
     g_reset_original = g_reset_vtbl_hook.original<ResetSignature>();
 
     g_imgui_hooks_installed = true;
+    ImGuiResetDx9HookFailureState();
     if (was_marked_installed)
         LogInFile(LOG_NAME, xorstr_("[LOG] DX9 vtable hooks reinstalled (Present/Reset).\n"));
     else
@@ -1499,17 +1894,24 @@ static bool InstallDx9Hooks()
 
 static DWORD WINAPI ImGuiHookInstallThread(LPVOID)
 {
-    while (!g_imgui_hooks_installed)
+    while (!g_imgui_hook_thread_stop_requested)
     {
-        if (GetModuleHandleA(xorstr_("d3d9.dll")) != nullptr)
+        if (!g_imgui_d3d_factory_hooks_installed)
+            ImGuiInstallD3DFactoryHooks();
+
+        if (!ImGuiAreDx9HooksAlive())
         {
-            if (InstallDx9Hooks())
-            {
-                g_imgui_hook_thread_running = false;
-                return 0;
-            }
+            InstallDx9Hooks();
         }
-        Sleep(250);
+
+        if (g_imgui_device && !ImGuiIsWndProcHookAlive())
+        {
+            ImGuiEnsureWndProcHook(g_imgui_device);
+            if (ImGuiIsWndProcHookAlive())
+                LogInFile(LOG_NAME, xorstr_("[LOG] ImGui WndProc hook restored.\n"));
+        }
+
+        Sleep(750);
     }
     g_imgui_hook_thread_running = false;
     return 0;
@@ -1517,6 +1919,7 @@ static DWORD WINAPI ImGuiHookInstallThread(LPVOID)
 
 static void StartImGuiHookingAsync()
 {
+    g_imgui_hook_thread_stop_requested = false;
     if (g_imgui_hook_thread_running.exchange(true))
         return;
 
@@ -1535,6 +1938,9 @@ static void ImGuiEnsureHooksForLuaInvoke()
         LogInFile(LOG_NAME, xorstr_("[WARN] ImGui context disappeared, waiting for reinit.\n"));
     }
 
+    if (!g_imgui_d3d_factory_hooks_installed)
+        ImGuiInstallD3DFactoryHooks();
+
     if (!ImGuiAreDx9HooksAlive())
     {
         if (!InstallDx9Hooks())
@@ -1551,12 +1957,27 @@ static void ImGuiEnsureHooksForLuaInvoke()
 
 static void ShutdownImGuiHooking()
 {
+    g_imgui_hook_thread_stop_requested = true;
     g_imgui_hook_thread_running = false;
     g_present_vtbl_hook.remove();
     g_reset_vtbl_hook.remove();
     g_present_original = nullptr;
     g_reset_original = nullptr;
     g_imgui_hooks_installed = false;
+    g_imgui_present_slot = nullptr;
+    g_imgui_reset_slot = nullptr;
+    g_imgui_device = nullptr;
+
+    ImGuiRemoveMinHook(g_imgui_create_device_ex_target);
+    ImGuiRemoveMinHook(g_imgui_create_device_target);
+    ImGuiRemoveMinHook(g_imgui_direct3d_create9ex_target);
+    ImGuiRemoveMinHook(g_imgui_direct3d_create9_target);
+    g_imgui_direct3d_create9_original = nullptr;
+    g_imgui_direct3d_create9ex_original = nullptr;
+    g_imgui_create_device_original = nullptr;
+    g_imgui_create_device_ex_original = nullptr;
+    g_imgui_d3d_factory_hooks_installed = false;
+    g_imgui_d3d9_module = nullptr;
 
     if (g_imgui_hwnd && g_imgui_old_wndproc)
     {
@@ -1582,6 +2003,8 @@ static void ShutdownImGuiHooking()
         g_cursor_visible_by_imgui = false;
     }
 
+    g_imgui_dx9_hook_fail_count = 0;
+    g_imgui_dx9_hook_last_fail_log = 0;
     ImGuiSetLuaRenderAllowed(false);
     ImGuiDestroyContextSafe();
 }
