@@ -10,7 +10,9 @@
 #pragma warning (disable : 4244)
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
-#define MIRAGE_VERSION xorstr_("V6.8") // Версия инжектора
+#undef MIRAGE_VERSION
+#define MIRAGE_VERSION xorstr_("V6.9")
+#define MIRAGE_VERSION_INFO xorstr_("6.9.0.0")
 #define TO_ELEMENTID(x) ((ElementID) reinterpret_cast < unsigned long > (x) )
 #include <Windows.h>
 #include <stdio.h>
@@ -32,6 +34,7 @@
 #include <map>
 #include <codecvt>
 #include <tuple>
+#include <deque>
 #include "sigscan.h"
 #include "xorstr.h"
 #include "Registry.h"
@@ -56,12 +59,12 @@
 #include "NetAPI/SyncStructures.h"
 #include "BreakPoint.h"
 #include "Utils/Encoding.h"
+void __stdcall LogInFile(std::string log_name, const char* log, ...);
 #include "Utils/Hooking.h"
 #include "Utils/StringSearch.h"
 //#include "DroidVSDK.h"
 typedef void(__cdecl* ptrWriteCameraOrientation)(const CVector& vecPositionBase, NetBitStreamInterface& BitStream);
 ptrWriteCameraOrientation callWriteCameraOrientation = nullptr;
-void __stdcall LogInFile(std::string log_name, const char* log, ...);
 #include "IAT.h"
 CNet* g_pNet = nullptr;
 bool crasher = false;
@@ -74,9 +77,25 @@ std::atomic_bool block_screen_packet = false;
 std::atomic_bool disable_explosion_projectile_events = false;
 std::unordered_set<std::string> command_ignore_set;
 std::mutex command_ignore_mutex;
+std::deque<std::string> script_change_warning_queue;
+std::mutex script_change_warning_mutex;
 std::unordered_map<int, FILE*> lua_file_handles;
 std::mutex lua_file_mutex;
 std::atomic_int lua_file_next_id = 1;
+static inline void QueueScriptChangeWarningMessage(const std::string& message)
+{
+	if (message.empty()) return;
+	std::lock_guard<std::mutex> lock(script_change_warning_mutex);
+	script_change_warning_queue.push_back(message);
+}
+static inline bool PopScriptChangeWarningMessage(std::string& out)
+{
+	std::lock_guard<std::mutex> lock(script_change_warning_mutex);
+	if (script_change_warning_queue.empty()) return false;
+	out = std::move(script_change_warning_queue.front());
+	script_change_warning_queue.pop_front();
+	return true;
+}
 static inline bool IsCommandSpace(char c)
 {
 	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
@@ -216,6 +235,10 @@ BYTE vertex_static_prologue[5] = { 0x0 };
 BYTE vertex_dynamic_prologue[5] = { 0x0 };
 
 bool OneClientLoad = false;
+std::atomic<DWORD> g_client_dll_reload_suppress_until = 0;
+std::atomic_bool g_client_dll_reload_worker_running = false;
+constexpr DWORD CLIENT_DLL_RELOAD_SETTLE_MS = 1500;
+constexpr DWORD CLIENT_DLL_RELOAD_SUPPRESS_MS = 8000;
 
 void lua_register(void* L, const char* func_name, lua_CFunction f)
 {
@@ -340,6 +363,9 @@ typedef struct
 	bool Dumper;
 	std::string dump_resource_name;
 	bool DumpAllScripts;
+	bool DumpOnlyCached;
+	bool WarnChanges;
+	unsigned int MenuToggleVk;
 	DllInjectionType dll_injection_type;
 	bool set_public;
 	std::string public_serial;
@@ -515,6 +541,43 @@ bool RemoveProcedureHook()
 
 	return true;
 }
+DWORD WINAPI ClientDllReloadWorker(LPVOID)
+{
+	hwbp_end1 = false;
+	hwbp_end2 = false;
+	LogInFile(LOG_NAME, xorstr_("[LOG] Processing deferred client.dll reload.\n"));
+	LogInFile(LOG_NAME, xorstr_("[LOG] Deferred reload: reset Lua thread bridge state.\n"));
+	ResetLuaThreadBridgeState();
+	Sleep(CLIENT_DLL_RELOAD_SETTLE_MS);
+	g_client_dll_reload_suppress_until = GetTickCount() + CLIENT_DLL_RELOAD_SUPPRESS_MS;
+	LogInFile(LOG_NAME, xorstr_("[LOG] Deferred reload: notify ImGui.\n"));
+	ImGuiNotifyClientDllReload();
+	LogInFile(LOG_NAME, xorstr_("[LOG] Deferred reload: rerun SignatureScanner.\n"));
+	SignatureScanner();
+	LogInFile(LOG_NAME, xorstr_("[LOG] Deferred reload: completed.\n"));
+	g_client_dll_reload_worker_running = false;
+	return 0;
+}
+void QueueClientDllReloadWork()
+{
+	DWORD now = GetTickCount();
+	DWORD suppress_until = g_client_dll_reload_suppress_until.load();
+	if (suppress_until != 0 && static_cast<LONG>(suppress_until - now) > 0)
+		return;
+
+	if (g_client_dll_reload_worker_running.exchange(true))
+		return;
+
+	HANDLE hThread = CreateThread(nullptr, 0, ClientDllReloadWorker, nullptr, 0, nullptr);
+	if (hThread)
+	{
+		CloseHandle(hThread);
+		return;
+	}
+
+	g_client_dll_reload_worker_running = false;
+	LogInFile(LOG_NAME, xorstr_("[ERROR] Failed to create deferred client.dll reload worker.\n"));
+}
 HMODULE __stdcall hkLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
 	if (!callLoadLibraryExW)
@@ -530,12 +593,13 @@ call_original:
 	{
 		std::wstring wstrLibFileName = std::wstring(lpLibFileName);
 		bool mappedAsImage = (dwFlags & DONT_RESOLVE_DLL_REFERENCES) != 0;
-		if (w_findStringIC(wstrLibFileName, xorstr_(L"client.dll")) && !mappedAsImage)
+		if (hModule && w_findStringIC(wstrLibFileName, xorstr_(L"client.dll")) && !mappedAsImage)
 		{
 			LogInFile(LOG_NAME, xorstr_("[LOG] Сработал хук LoadLibraryW на загрузку client.dll!\n"));
 			hwbp_end1 = false; // сбрасываем флаг на хуки
 			hwbp_end2 = false; // сбрасываем флаг на хуки
-			SignatureScanner(); // Запускаем сканнер сигнатур и ставим хуки
+			QueueClientDllReloadWork();
+			return hModule;
 		}
 	}
 	return hModule;

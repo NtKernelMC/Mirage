@@ -89,6 +89,7 @@ void AsyncThread()
     }
     RemoveOldLog();
     CrashHandler::Install();
+    CrashHandler::LogStatus();
     //lua_scripts_dir = xorstr_(L"C:\\Users\\RAID\\source\\repos\\Karakurt\\Win32\\Debug");
 	HMODULE hK32 = GetModuleHandleA(xorstr_("kernel32.dll"));
 	if (!hK32)
@@ -100,14 +101,13 @@ void AsyncThread()
 		callExitProcess = (ptrExitProcess)GetProcAddress(hK32, xorstr_("ExitProcess"));
 		if (callExitProcess != nullptr)
 		{
-			MakeJump((DWORD)callExitProcess, (DWORD)hkExitProcess, exit_prologue, sizeof(exit_prologue));
-			LogInFile(LOG_NAME, xorstr_("[LOG] ExitProcess is Hooked!\n"));
+			EnsureInlineJumpHook((DWORD)callExitProcess, (DWORD)hkExitProcess, exit_prologue, sizeof(exit_prologue), "ExitProcess");
 		}
 		else LogInFile(LOG_NAME, xorstr_("[LOG] ExitProcess export is NULL!\n"));
 	}
 	RemoveOldDumpedScripts(xorstr_("DumpedScripts"));
     RemoveOldDumpedScripts(xorstr_("Chunks"));
-    LogInFile(LOG_NAME, xorstr_("[LOG] Mirage Injector By DroidZero! Build Version: %s\n"), MIRAGE_VERSION);
+    LogInFile(LOG_NAME, xorstr_("[LOG] Mirage Injector By DroidZero! Build Version: %s (%s)\n"), MIRAGE_VERSION, MIRAGE_VERSION_INFO);
     ParseLuaConfig(); // Читаем луашные конфиги, 1 конфиг на 1 луа скрипт
     ParseMirageConfig(); // Грузим настройки луа инжектора
     if (!GetModuleHandleA(xorstr_("core.dll"))) Sleep(1);
@@ -129,8 +129,7 @@ void AsyncThread()
         {
             if ((!DbgHook || mirage.hwbp_hooking == HookingType::HWBP_HOOK) && mirage.hwbp_hooking != HookingType::IAT && (mirage.injection_type != LuaInjectionType::METHOD_EXOTIC || mirage.hwbp_hooking == HookingType::HWBP_HOOK))
             {
-                LogInFile(LOG_NAME, xorstr_("[LOG] GetThreadContext is Hooked!\n"));
-                MakeJump((DWORD)callGetThreadContext, (DWORD)hookGetThreadContext, thread_prologue, sizeof(thread_prologue));
+                EnsureInlineJumpHook((DWORD)callGetThreadContext, (DWORD)hookGetThreadContext, thread_prologue, sizeof(thread_prologue), "GetThreadContext");
             }
         }
         else LogInFile(LOG_NAME, xorstr_("[LOG] GetThreadContext export is NULL!\n"));
@@ -143,16 +142,7 @@ void AsyncThread()
 		loadLibraryExWTarget = GetProcAddress(hForLoadLib, xorstr_("LoadLibraryExW"));
 		if (loadLibraryExWTarget != nullptr)
 		{
-			MH_STATUS hookStatus = MH_CreateHook(loadLibraryExWTarget, &hkLoadLibraryExW, reinterpret_cast<LPVOID*>(&callLoadLibraryExW));
-			if (hookStatus == MH_OK || hookStatus == MH_ERROR_ALREADY_CREATED)
-			{
-				hookStatus = MH_EnableHook(loadLibraryExWTarget);
-				if (hookStatus == MH_OK || hookStatus == MH_ERROR_ENABLED)
-					LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW is Hooked by MinHook!\n"));
-				else
-					LogInFile(LOG_NAME, xorstr_("[ERROR] MH_EnableHook failed for LoadLibraryExW: %d\n"), hookStatus);
-			}
-			else LogInFile(LOG_NAME, xorstr_("[ERROR] MH_CreateHook failed for LoadLibraryExW: %d\n"), hookStatus);
+			EnsureMinHook(loadLibraryExWTarget, &hkLoadLibraryExW, reinterpret_cast<void**>(&callLoadLibraryExW), "LoadLibraryExW");
 		}
 		else LogInFile(LOG_NAME, xorstr_("[LOG] LoadLibraryExW export is NULL!\n"));
 

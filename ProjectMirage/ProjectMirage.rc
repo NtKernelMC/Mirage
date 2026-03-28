@@ -124,9 +124,9 @@ IDI_ICON1               ICON                    "Aha-Soft-Desktop-Halloween-Spid
 
 VS_VERSION_INFO VERSIONINFO
 
- FILEVERSION 1,0,0,1
+ FILEVERSION 6,9,0,0
 
- PRODUCTVERSION 1,0,0,1
+ PRODUCTVERSION 6,9,0,0
 
  FILEFLAGSMASK 0x3fL
 
@@ -160,7 +160,7 @@ BEGIN
 
             VALUE "FileDescription", "Private Lua Injector"
 
-            VALUE "FileVersion", "1.0.0.1"
+            VALUE "FileVersion", "6.9.0.0"
 
             VALUE "InternalName", "Mirage.exe"
 
@@ -170,7 +170,7 @@ BEGIN
 
             VALUE "ProductName", "Project Mirage by UGTA Hacks"
 
-            VALUE "ProductVersion", "1.0.0.1"
+            VALUE "ProductVersion", "6.9.0.0"
 
         END
 

@@ -191,6 +191,29 @@ static std::atomic_ullong g_mirage_lua_thread_next_id{ 1 };
 static std::atomic_int g_mirage_cached_lua_main_resource_offset{ -1 };
 static std::atomic_int g_mirage_cached_resource_vm_offset{ -1 };
 
+static void ResetLuaThreadBridgeState()
+{
+	size_t clearedThreads = 0;
+	{
+		std::lock_guard<std::mutex> lock(g_mirage_lua_threads_mutex);
+		clearedThreads = g_mirage_lua_threads.size();
+		g_mirage_lua_threads.clear();
+	}
+
+	g_mirage_lua_thread_next_id.store(1);
+	g_mirage_cached_lua_main_resource_offset.store(-1);
+	g_mirage_cached_resource_vm_offset.store(-1);
+	callCreateVirtualMachine = nullptr;
+	callRemoveVirtualMachine = nullptr;
+	callLoadScriptFromBufferInVm = nullptr;
+	callGetResourceByName = nullptr;
+	callGetResourceFromLuaState = nullptr;
+	g_mirage_resource_manager = nullptr;
+	g_mirage_resource_manager_slot = nullptr;
+
+	LogInFile(LOG_NAME, xorstr_("[LOG] Reset Lua thread bridge state. cleared_threads=%zu\n"), clearedThreads);
+}
+
 static bool IsReadableMemory(const void* ptr, size_t size)
 {
 	if (!ptr || size == 0)
@@ -641,6 +664,64 @@ static bool UnloadDedicatedVmThread(unsigned long long threadId, std::string& ou
 	}
 
 	return true;
+}
+
+static bool TryRemoveLuaVmForReload(void* luaManager, void* luaMain)
+{
+	__try
+	{
+		if (!callRemoveVirtualMachine || !luaManager || !luaMain)
+			return false;
+		if (!IsReadableMemory(luaManager, sizeof(void*)) || !IsReadableMemory(luaMain, sizeof(void*)))
+			return false;
+		return callRemoveVirtualMachine(luaManager, luaMain);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+}
+
+static void ForceUnloadDedicatedVmThreadsForReload()
+{
+	std::vector<MirageLuaThreadEntry> activeThreads;
+	{
+		std::lock_guard<std::mutex> lock(g_mirage_lua_threads_mutex);
+		for (const auto& entry : g_mirage_lua_threads)
+		{
+			if (!entry.active || !entry.luaManager || !entry.luaMain)
+				continue;
+			activeThreads.push_back(entry);
+		}
+	}
+
+	size_t removedCount = 0;
+	size_t failedCount = 0;
+
+	for (const auto& entry : activeThreads)
+	{
+		bool removed = TryRemoveLuaVmForReload(entry.luaManager, entry.luaMain);
+
+		if (removed)
+			++removedCount;
+		else
+			++failedCount;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(g_mirage_lua_threads_mutex);
+		for (auto& entry : g_mirage_lua_threads)
+		{
+			entry.active = false;
+			entry.luaMain = nullptr;
+			entry.luaManager = nullptr;
+		}
+	}
+
+	LogInFile(LOG_NAME, xorstr_("[LOG] Force-unloaded Lua thread VMs for reload. total=%zu removed=%zu failed=%zu\n"),
+		activeThreads.size(),
+		removedCount,
+		failedCount);
 }
 
 static std::string BuildLuaThreadListDump()
@@ -1146,6 +1227,25 @@ int __cdecl invokeFunction(void* luaVM)
 			}
 		}
 		call_pushstring(luaVM, out.c_str());
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("nextScriptChangeWarning")))
+	{
+		std::string warning;
+		if (PopScriptChangeWarningMessage(warning))
+			call_pushstring(luaVM, warning.c_str());
+		else
+			call_pushboolean(luaVM, false);
+		return 1;
+	}
+	if (findStringIC(func_name, xorstr_("debugLog")))
+	{
+		call_lua_remove(luaVM, 1);
+		unsigned int logLen = 0;
+		std::string message = call_tostring(luaVM, 1, &logLen);
+		if (!message.empty())
+			LogInFile(LOG_NAME, xorstr_("[LUA] %s\n"), message.c_str());
+		call_pushboolean(luaVM, true);
 		return 1;
 	}
 	if (findStringIC(func_name, xorstr_("removeDbgHook")))

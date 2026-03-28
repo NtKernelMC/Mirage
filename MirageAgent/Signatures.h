@@ -171,12 +171,7 @@ void SignatureScanner()
 	if (mirage.fork_version == ForkVersion::FORK_VERSION_1_5) LegacyBypass::EvadeAnticheat();
     if (mirage.fork_version == ForkVersion::FORK_VERSION_1_6)
     {
-        static bool oncer = false;
-        if (!oncer)
-        {
-            ModernBypass::EvadeAnticheat();
-            oncer = true;
-        }
+        ModernBypass::EvadeAnticheat();
         DWORD oldProtect = 0x0;
         DWORD patch_addr = (DWORD)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("E8 ? ? ? ? 83 C4 ? 46 3B F7 0F 8C"));
         if (patch_addr != NULL)
@@ -215,9 +210,7 @@ void SignatureScanner()
     if (callCallEvent != nullptr)
     {
         LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to CallEvent!\n"));
-        MH_RemoveHook(callCallEvent);
-        MH_CreateHook(callCallEvent, &CallEvent, reinterpret_cast<LPVOID*>(&callCallEvent));
-        MH_EnableHook(MH_ALL_HOOKS);
+        EnsureMinHook(callCallEvent, &CallEvent, reinterpret_cast<void**>(&callCallEvent), "CallEvent");
     }
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for CallEvent.\n"));
     if (callProcessMessage == nullptr)
@@ -238,9 +231,7 @@ void SignatureScanner()
     if (getPedVoiceTarget != nullptr)
     {
         LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to getPedVoice!\n"));
-        MH_RemoveHook(getPedVoiceTarget);
-        MH_CreateHook(getPedVoiceTarget, invokeFunction, reinterpret_cast<LPVOID*>(&callGetPedVoice));
-        MH_EnableHook(MH_ALL_HOOKS);
+        EnsureMinHook(getPedVoiceTarget, invokeFunction, reinterpret_cast<void**>(&callGetPedVoice), "getPedVoice");
     }
     else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for getPedVoice.\n"));
     /*callDecodeAndBuffer = (ptrDecodeAndBuffer)scan.FindPatternIDA(xorstr_("client.dll"),
@@ -380,7 +371,7 @@ void SignatureScanner()
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to Lua Engine!\n"));
             if (mirage.hwbp_hooking == HookingType::IAT) hookIATwithName(xorstr_("client.dll"), xorstr_("luaL_loadbuffer"), (DWORD)&hkLuaLoadBuffer, (DWORD*)&callLuaLoadBuffer);
-            if (mirage.hwbp_hooking == HookingType::INLINE_JUMP) MakeJump((DWORD)callLuaLoadBuffer, (DWORD)&hkLuaLoadBuffer, loadbuff_prologue, sizeof(loadbuff_prologue));
+            if (mirage.hwbp_hooking == HookingType::INLINE_JUMP) EnsureInlineJumpHook((DWORD)callLuaLoadBuffer, (DWORD)&hkLuaLoadBuffer, loadbuff_prologue, sizeof(loadbuff_prologue), "luaL_loadbuffer");
             if (mirage.hwbp_hooking == HookingType::HWBP_HOOK) HWBP::InstallHWBP((DWORD)callLuaLoadBuffer, (DWORD)&hkLuaLoadBuffer);
         }
         else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a sig for Lua Engine. 0x%X\n"));
@@ -392,7 +383,7 @@ void SignatureScanner()
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to Lua Engine!\n"));
             if (mirage.hwbp_hooking == HookingType::IAT) hookIATwithName(xorstr_("client.dll"), xorstr_("luaL_load"), (DWORD)&lua_load, (DWORD*)&call_lua_load);
-            if (mirage.hwbp_hooking == HookingType::INLINE_JUMP) MakeJump((DWORD)call_lua_load, (DWORD)&lua_load, load_prologue, sizeof(load_prologue));
+            if (mirage.hwbp_hooking == HookingType::INLINE_JUMP) EnsureInlineJumpHook((DWORD)call_lua_load, (DWORD)&lua_load, load_prologue, sizeof(load_prologue), "lua_load");
             if (mirage.hwbp_hooking == HookingType::HWBP_HOOK) HWBP::InstallHWBP((DWORD)call_lua_load, (DWORD)&lua_load);
         }
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a sig for Lua Engine.\n"));
@@ -408,9 +399,7 @@ void SignatureScanner()
         if (callIsNameAllowed != nullptr)
         {
             LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to IsNameAllowed!\n"));
-            MH_RemoveHook(callIsNameAllowed);
-            MH_CreateHook(callIsNameAllowed, IsNameAllowed, reinterpret_cast<LPVOID*>(&callIsNameAllowed));
-            MH_EnableHook(MH_ALL_HOOKS);
+            EnsureMinHook(callIsNameAllowed, IsNameAllowed, reinterpret_cast<void**>(&callIsNameAllowed), "IsNameAllowed");
         }
         else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a sig for IsNameAllowed!\n"));
     }

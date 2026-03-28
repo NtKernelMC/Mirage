@@ -21,11 +21,14 @@ void __stdcall LogInFile(std::string log_name, const char* log, ...)
 	if (hFile)
 	{
 		time_t t = std::time(0); tm* now = std::localtime(&t);
-		char tmp_stamp[600]; memset(tmp_stamp, 0, sizeof(tmp_stamp));
+		char tmp_stamp[64]; memset(tmp_stamp, 0, sizeof(tmp_stamp));
 		sprintf(tmp_stamp, xorstr_("[%d:%d:%d]"), now->tm_hour, now->tm_min, now->tm_sec);
-		strcat(tmp_stamp, std::string(" " + std::string(log)).c_str());
-		va_list arglist; va_start(arglist, log); vfprintf(hFile, tmp_stamp, arglist);
-		va_end(arglist); fclose(hFile);
+		char msg_buf[8192]; memset(msg_buf, 0, sizeof(msg_buf));
+		va_list arglist; va_start(arglist, log);
+		vsnprintf(msg_buf, sizeof(msg_buf) - 1, log ? log : "", arglist);
+		va_end(arglist);
+		fprintf(hFile, "%s %s", tmp_stamp, msg_buf);
+		fclose(hFile);
 	}
 #endif
 }

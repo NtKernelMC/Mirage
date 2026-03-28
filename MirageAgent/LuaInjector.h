@@ -9,6 +9,15 @@ std::vector<std::string> mirage_resource_list;
 std::mutex mirage_resources_mutex;
 static std::unordered_set<std::string> logical_bomb_logged_scripts;
 static std::mutex logical_bomb_mutex;
+static std::unordered_map<std::string, std::unordered_map<std::string, unsigned long long>> script_hash_snapshot_baselines;
+static std::unordered_map<std::string, std::unordered_map<std::string, unsigned long long>> script_hash_snapshots;
+static std::unordered_map<std::string, bool> script_hash_snapshot_has_file;
+static std::unordered_set<std::string> script_hash_snapshot_loaded;
+static std::unordered_set<std::string> script_hash_warned_keys;
+static std::mutex script_hash_snapshot_mutex;
+static std::wstring cached_game_file_cache_dir;
+static bool cached_game_file_cache_dir_loaded = false;
+static std::mutex cached_game_file_cache_dir_mutex;
 
 static std::string ExtractResourceName(const std::string& script_name)
 {
@@ -27,6 +36,386 @@ static std::string ExtractResourceName(const std::string& script_name)
         return script_name.substr(start);
 
     return script_name.substr(start, sep - start);
+}
+
+static std::string ExtractSnapshotResourceName(const std::string& script_name)
+{
+    std::string normalized = NormalizeDumpSlashes(script_name);
+    if (normalized.empty())
+        return {};
+
+    size_t start = normalized[0] == '@' ? 1 : 0;
+    size_t sep = normalized.find('\\', start);
+    if (sep == std::string::npos)
+        return {};
+
+    return normalized.substr(start, sep - start);
+}
+
+static std::string ExtractSnapshotScriptPath(const std::string& script_name)
+{
+    std::string normalized = NormalizeDumpSlashes(script_name);
+    if (normalized.empty())
+        return {};
+
+    size_t start = normalized[0] == '@' ? 1 : 0;
+    size_t sep = normalized.find('\\', start);
+    if (sep == std::string::npos || sep + 1 >= normalized.size())
+        return {};
+
+    return BuildDumpRelativePath(normalized.substr(sep + 1), xorstr_("root.lua"));
+}
+
+static bool IsAnonymousChunkName(const char* script_name)
+{
+    if (!script_name || !script_name[0])
+        return true;
+    return !findStringIC(script_name, xorstr_("@"));
+}
+
+static bool HasNamedDumpPath(const char* script_name)
+{
+    if (!script_name || !script_name[0])
+        return false;
+    if (script_name[0] != '@')
+        return false;
+
+    size_t len = strlen(script_name);
+    if (len < 4 || len > 512)
+        return false;
+    if (!strchr(script_name, '\\') && !strchr(script_name, '/'))
+        return false;
+
+    for (size_t i = 0; i < len; ++i)
+    {
+        char ch = script_name[i];
+        if (ch == '\r' || ch == '\n' || ch == '\t')
+            return false;
+    }
+
+    std::string relative_path = BuildDumpRelativePath(script_name);
+    size_t slash_pos = relative_path.find('\\');
+    size_t dot_pos = relative_path.find_last_of('.');
+    return slash_pos != std::string::npos && dot_pos != std::string::npos && dot_pos > slash_pos;
+}
+
+static unsigned long long CalculateScriptSnapshotHash(const char* buffer, size_t size)
+{
+    const unsigned long long kOffset = 14695981039346656037ull;
+    const unsigned long long kPrime = 1099511628211ull;
+    unsigned long long hash = kOffset;
+    for (size_t i = 0; i < size; ++i)
+    {
+        hash ^= static_cast<unsigned char>(buffer[i]);
+        hash *= kPrime;
+    }
+    return hash;
+}
+
+static bool IsValidSnapshotScriptName(const std::string& script_name)
+{
+    if (script_name.size() < 4 || script_name.size() > 512)
+        return false;
+    if (script_name[0] != '@')
+        return false;
+    if (script_name.find('\\') == std::string::npos && script_name.find('/') == std::string::npos)
+        return false;
+
+    for (char ch : script_name)
+    {
+        if (ch == '\r' || ch == '\n' || ch == '\t')
+            return false;
+    }
+
+    return true;
+}
+
+static bool LoadScriptHashSnapshotFile(const std::string& resource_name, std::unordered_map<std::string, unsigned long long>& out_snapshot);
+
+static void EnsureScriptHashSnapshotLoadedLocked(const std::string& resource_name)
+{
+    if (resource_name.empty() || script_hash_snapshot_loaded.count(resource_name))
+        return;
+
+    std::unordered_map<std::string, unsigned long long> loaded_snapshot;
+    const bool has_file = LoadScriptHashSnapshotFile(resource_name, loaded_snapshot);
+    script_hash_snapshot_baselines[resource_name] = loaded_snapshot;
+    script_hash_snapshots[resource_name] = std::move(loaded_snapshot);
+    script_hash_snapshot_has_file[resource_name] = has_file;
+    script_hash_snapshot_loaded.insert(resource_name);
+}
+
+static bool HasSnapshotBaselineScriptPath(const std::string& script_name)
+{
+    if (!IsValidSnapshotScriptName(script_name))
+        return false;
+
+    const std::string resource_name = ExtractSnapshotResourceName(script_name);
+    const std::string relative_path = ExtractSnapshotScriptPath(script_name);
+    if (resource_name.empty() || relative_path.empty())
+        return false;
+
+    std::lock_guard<std::mutex> lock(script_hash_snapshot_mutex);
+    EnsureScriptHashSnapshotLoadedLocked(resource_name);
+    if (!script_hash_snapshot_has_file[resource_name])
+        return false;
+
+    const auto& baseline = script_hash_snapshot_baselines[resource_name];
+    return baseline.find(relative_path) != baseline.end();
+}
+
+static std::wstring ReadGameRegistryString(HKEY root, const wchar_t* subkey, const wchar_t* value_name)
+{
+    DWORD type = 0;
+    DWORD size = 0;
+    if (RegGetValueW(root, subkey, value_name, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &type, nullptr, &size) != ERROR_SUCCESS)
+        return {};
+
+    std::vector<wchar_t> buf(size / sizeof(wchar_t) + 1, L'\0');
+    if (RegGetValueW(root, subkey, value_name, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &type, buf.data(), &size) != ERROR_SUCCESS)
+        return {};
+
+    return buf.data();
+}
+
+static std::wstring GetGameFileCacheDir()
+{
+    std::lock_guard<std::mutex> lock(cached_game_file_cache_dir_mutex);
+    if (cached_game_file_cache_dir_loaded)
+        return cached_game_file_cache_dir;
+
+    cached_game_file_cache_dir = ReadGameRegistryString(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\WOW6432Node\\UKRAINEGTA: GLAB3\\Common", L"File Cache Path");
+
+    if (cached_game_file_cache_dir.empty())
+        cached_game_file_cache_dir = ReadGameRegistryString(HKEY_LOCAL_MACHINE,
+            L"SOFTWARE\\WOW6432Node\\Multi Theft Auto: San Andreas All\\Common", L"File Cache Path");
+
+    if (cached_game_file_cache_dir.empty())
+    {
+        wchar_t module_path[MAX_PATH]{};
+        if (GetModuleFileNameW(nullptr, module_path, MAX_PATH) > 0)
+        {
+            std::filesystem::path fallback = std::filesystem::path(module_path).parent_path();
+            fallback /= L"mods";
+            fallback /= L"deathmatch";
+            cached_game_file_cache_dir = fallback.wstring();
+        }
+    }
+
+    cached_game_file_cache_dir_loaded = true;
+    return cached_game_file_cache_dir;
+}
+
+static std::filesystem::path BuildGameResourceScriptPath(const char* script_name)
+{
+    if (!HasNamedDumpPath(script_name))
+        return {};
+
+    std::wstring file_cache_dir = GetGameFileCacheDir();
+    if (file_cache_dir.empty())
+        return {};
+
+    std::string normalized = NormalizeDumpSlashes(script_name);
+    if (!normalized.empty() && normalized[0] == '@')
+        normalized.erase(0, 1);
+
+    std::filesystem::path result(file_cache_dir);
+    result /= L"resources";
+
+    size_t start = 0;
+    while (start <= normalized.size())
+    {
+        size_t pos = normalized.find('\\', start);
+        std::string token = pos == std::string::npos ? normalized.substr(start) : normalized.substr(start, pos - start);
+        if (!token.empty())
+            result /= std::wstring(token.begin(), token.end());
+        if (pos == std::string::npos)
+            break;
+        start = pos + 1;
+    }
+
+    return result;
+}
+
+static bool IsScriptCachedByGameResources(const char* script_name)
+{
+    std::filesystem::path file_path = BuildGameResourceScriptPath(script_name);
+    if (file_path.empty())
+        return false;
+
+    std::error_code ec;
+    return !std::filesystem::exists(file_path, ec);
+}
+
+static bool IsHiddenCachedScriptPath(const char* script_name)
+{
+    if (!HasNamedDumpPath(script_name))
+        return false;
+    return IsScriptCachedByGameResources(script_name);
+}
+
+static bool ShouldDumpNamedScript(const char* script_name)
+{
+    if (!HasNamedDumpPath(script_name))
+        return false;
+    if (mirage.DumpAllScripts)
+        return true;
+    if (!mirage.dump_resource_name.empty())
+        return findStringIC(script_name, mirage.dump_resource_name);
+    return false;
+}
+
+static bool ShouldDumpHiddenCachedScript(const char* script_name)
+{
+    if (!IsHiddenCachedScriptPath(script_name))
+        return false;
+    if (mirage.DumpOnlyCached)
+        return true;
+    return ShouldDumpNamedScript(script_name);
+}
+
+static std::filesystem::path BuildScriptSnapshotPath(const std::string& resource_name)
+{
+    std::filesystem::path base(lua_scripts_dir);
+    base /= xorstr_("ScriptSnapshots");
+    base /= BuildDumpRelativePath(resource_name, xorstr_("unknown"));
+
+    std::error_code ec;
+    std::filesystem::create_directories(base, ec);
+    return base / xorstr_("snapshot.hashes");
+}
+
+static std::filesystem::path BuildLegacyScriptSnapshotPath(const std::string& resource_name)
+{
+    std::filesystem::path base(lua_scripts_dir);
+    base /= xorstr_("ScriptSnapshots");
+    std::error_code ec;
+    std::filesystem::create_directories(base, ec);
+
+    std::string file_name = BuildDumpRelativePath(resource_name, xorstr_("unknown"));
+    for (char& ch : file_name)
+    {
+        if (ch == '\\') ch = '_';
+    }
+
+    return base / (file_name + xorstr_(".hashes"));
+}
+
+static bool LoadScriptHashSnapshotFile(const std::string& resource_name, std::unordered_map<std::string, unsigned long long>& out_snapshot)
+{
+    out_snapshot.clear();
+    std::ifstream file(BuildScriptSnapshotPath(resource_name), std::ios::binary);
+    if (!file.is_open())
+        file.open(BuildLegacyScriptSnapshotPath(resource_name), std::ios::binary);
+    if (!file.is_open())
+        return false;
+
+    std::string line;
+    while (std::getline(file, line))
+    {
+        size_t sep = line.rfind('|');
+        if (sep == std::string::npos || sep == 0 || sep + 1 >= line.size())
+            continue;
+
+        std::string path = line.substr(0, sep);
+        unsigned long long hash = _strtoui64(line.c_str() + sep + 1, nullptr, 16);
+        if (!path.empty())
+            out_snapshot[path] = hash;
+    }
+    return true;
+}
+
+static void SaveScriptHashSnapshotFile(const std::string& resource_name, const std::unordered_map<std::string, unsigned long long>& snapshot)
+{
+    std::vector<std::pair<std::string, unsigned long long>> items(snapshot.begin(), snapshot.end());
+    std::sort(items.begin(), items.end(), [](const auto& a, const auto& b)
+    {
+        return a.first < b.first;
+    });
+
+    std::ofstream file(BuildScriptSnapshotPath(resource_name), std::ios::binary | std::ios::trunc);
+    if (!file.is_open())
+    {
+        LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t save script snapshot for resource: %s\n"), resource_name.c_str());
+        return;
+    }
+
+    for (const auto& item : items)
+    {
+        char hash_buf[32]{};
+        sprintf(hash_buf, xorstr_("%016llX"), item.second);
+        file << item.first << '|' << hash_buf << '\n';
+    }
+}
+
+static void TrackScriptHashSnapshot(const std::string& script_name, const char* buffer, size_t size)
+{
+    if (!mirage.WarnChanges || !buffer || size == 0 || script_name.empty())
+        return;
+    if (!IsValidSnapshotScriptName(script_name))
+        return;
+
+    const std::string resource_name = ExtractSnapshotResourceName(script_name);
+    const std::string relative_path = ExtractSnapshotScriptPath(script_name);
+    if (resource_name.empty() || relative_path.empty())
+        return;
+
+    const unsigned long long current_hash = CalculateScriptSnapshotHash(buffer, size);
+    bool should_warn = false;
+    bool should_save = false;
+
+    {
+        std::lock_guard<std::mutex> lock(script_hash_snapshot_mutex);
+        EnsureScriptHashSnapshotLoadedLocked(resource_name);
+
+        const bool has_snapshot_file = script_hash_snapshot_has_file[resource_name];
+        const auto& baseline = script_hash_snapshot_baselines[resource_name];
+        if (has_snapshot_file && baseline.find(relative_path) == baseline.end())
+            return;
+
+        auto& snapshot = script_hash_snapshots[resource_name];
+        auto it = snapshot.find(relative_path);
+        if (it == snapshot.end())
+        {
+            snapshot[relative_path] = current_hash;
+            should_save = true;
+        }
+        else if (it->second != current_hash)
+        {
+            it->second = current_hash;
+            should_save = true;
+            should_warn = true;
+        }
+
+        if (should_save)
+            script_hash_snapshot_has_file[resource_name] = true;
+    }
+
+    if (should_save)
+    {
+        std::lock_guard<std::mutex> lock(script_hash_snapshot_mutex);
+        SaveScriptHashSnapshotFile(resource_name, script_hash_snapshots[resource_name]);
+    }
+
+    if (should_warn)
+    {
+        char hash_buf[32]{};
+        sprintf(hash_buf, xorstr_("%016llX"), current_hash);
+        std::string warn_key = resource_name + xorstr_("|") + relative_path + xorstr_("|") + hash_buf;
+        bool fresh = false;
+        {
+            std::lock_guard<std::mutex> lock(script_hash_snapshot_mutex);
+            fresh = script_hash_warned_keys.insert(warn_key).second;
+        }
+
+        if (fresh)
+        {
+            std::string message = xorstr_("script changed: ") + resource_name + xorstr_("\\") + relative_path;
+            QueueScriptChangeWarningMessage(message);
+            LogInFile(LOG_NAME, xorstr_("[WARN] Script snapshot changed: %s\n"), message.c_str());
+        }
+    }
 }
 
 static void AddMirageResource(const std::string& script_name)
@@ -90,16 +479,19 @@ int __cdecl hkLuaLoadBuffer(void* L, char* buff, size_t sz, const char* name)
     static size_t injected_count = 0;
 
     LogLogicalBombWarning(name ? std::string(name) : std::string{}, buff, sz);
+    if (name)
+        TrackScriptHashSnapshot(name, buff, sz);
 
     // Дампим входящий скрипт при включенном дампере
     if (mirage.Dumper)
     {
-        if (name == nullptr)
+        if (ShouldDumpHiddenCachedScript(name))
         {
-            std::string scr_name_dmp = xorstr_("chunk.lua");
-            DumpIfNotDuplicate(xorstr_("Chunks"), scr_name_dmp.c_str(), buff, sz);
+            std::string scr_name_dmp = name;
+            DumpScript(xorstr_("DumpedScripts"), scr_name_dmp, buff, sz);
+            LogInFile(LOG_NAME, xorstr_("[LOG] Dumped cached script: %s | Size: %d\n"), scr_name_dmp.c_str(), sz);
         }
-        else if (findStringIC(name, mirage.dump_resource_name) || mirage.DumpAllScripts)
+        else if (!mirage.DumpOnlyCached && ShouldDumpNamedScript(name))
         {
             DumpScript(xorstr_("DumpedScripts"), name, buff, sz);
             LogInFile(LOG_NAME, xorstr_("[LOG] Dumped script: %s | Size: %d\n"), name, sz);
@@ -213,6 +605,8 @@ int __cdecl lua_load(void* L, lua_Reader reader, void* data, const char* chunkna
     {
         size_t script_size = (c_ptr->size == 0) ? strlen(c_ptr->s) : c_ptr->size;
         LogLogicalBombWarning(chunkname ? std::string(chunkname) : std::string{}, c_ptr->s, script_size);
+        if (chunkname)
+            TrackScriptHashSnapshot(chunkname, c_ptr->s, script_size);
     }
 
     // Дампим chunk из lua_load, если включен дампер
@@ -220,13 +614,14 @@ int __cdecl lua_load(void* L, lua_Reader reader, void* data, const char* chunkna
     {
         if (chunkname != nullptr && c_ptr != nullptr)
         {
-            if (!findStringIC(chunkname, xorstr_("@")))
+            if (ShouldDumpHiddenCachedScript(chunkname))
             {
-                std::string scr_name_dmp = xorstr_("chunk.lua");
                 size_t dump_size = (c_ptr->size == 0) ? strlen(c_ptr->s) : c_ptr->size;
-                DumpIfNotDuplicate(xorstr_("Chunks"), scr_name_dmp.c_str(), c_ptr->s, dump_size);
+                std::string scr_name_dmp = chunkname;
+                DumpScript(xorstr_("DumpedScripts"), scr_name_dmp, c_ptr->s, dump_size);
+                LogInFile(LOG_NAME, xorstr_("[LOG] Dumped cached script: %s | Size: %d\n"), scr_name_dmp.c_str(), dump_size);
             }
-            else if (findStringIC(chunkname, mirage.dump_resource_name) || mirage.DumpAllScripts)
+            else if (!mirage.DumpOnlyCached && ShouldDumpNamedScript(chunkname))
             {
                 size_t dump_size = (c_ptr->size == 0) ? strlen(c_ptr->s) : c_ptr->size;
                 DumpScript(xorstr_("DumpedScripts"), chunkname, c_ptr->s, dump_size);
@@ -612,21 +1007,20 @@ static const ExoticScriptEntry* ExoticFindScript(const std::string& chunk_name)
 
 static bool ExoticShouldDumpFull(const std::string& chunk_name)
 {
-    if (chunk_name.empty()) return false;
-    if (mirage.DumpAllScripts) return true;
-    if (!mirage.dump_resource_name.empty())
-    {
-        return findStringIC(chunk_name, mirage.dump_resource_name);
-    }
-    return false;
+    if (mirage.DumpOnlyCached) return false;
+    return ShouldDumpNamedScript(chunk_name.c_str());
 }
 
 static bool ExoticShouldDumpChunk(const std::string& chunk_name)
 {
+    if (mirage.DumpOnlyCached)
+    {
+        return IsHiddenCachedScriptPath(chunk_name.c_str());
+    }
     if (mirage.DumpAllScripts) return false;
     if (!mirage.dump_resource_name.empty()) return false;
     if (chunk_name.empty()) return true;
-    return !findStringIC(chunk_name, xorstr_("@"));
+    return IsAnonymousChunkName(chunk_name.c_str());
 }
 
 static void ExoticDrainOriginal(ExoticZio* z)
@@ -683,6 +1077,10 @@ static void ExoticPrepareDump(ExoticZioState& state, std::string& out_name, std:
         }
         return;
     }
+
+    if (!state.chunk_name.empty())
+        TrackScriptHashSnapshot(state.chunk_name, state.original_data.data(), state.original_data.size());
+
     if (ExoticShouldDumpFull(state.chunk_name))
     {
         out_name = ExoticBuildDumpName(state);
@@ -693,7 +1091,7 @@ static void ExoticPrepareDump(ExoticZioState& state, std::string& out_name, std:
     }
     if (ExoticShouldDumpChunk(state.chunk_name))
     {
-        out_name = state.compiled ? xorstr_("chunk.luac") : xorstr_("chunk.lua");
+        out_name = state.chunk_name.empty() ? (state.compiled ? xorstr_("chunk.luac") : xorstr_("chunk.lua")) : ExoticBuildDumpName(state);
         out_data = state.original_data;
         out_full = false;
         LogInFile(LOG_NAME, xorstr_("[LOG] EXOTIC: dump fallback chunk name=%s size=%d compiled=%d\n"), out_name.c_str(), out_data.size(), state.compiled ? 1 : 0);
@@ -916,7 +1314,7 @@ int __cdecl hkLuaDProtectedParser(void* L, ExoticZio* z, const char* name)
     const ExoticScriptEntry* replacement = ExoticFindScript(chunk_name);
     bool do_drain = false;
     bool log_replace = false;
-    bool want_dump = mirage.Dumper && (mirage.DumpAllScripts || ExoticShouldDumpFull(chunk_name));
+    bool want_dump = mirage.Dumper && (ExoticShouldDumpFull(chunk_name) || ExoticShouldDumpChunk(chunk_name));
     {
         std::lock_guard<std::mutex> lock(exotic_mutex);
         auto& state = exotic_states[z];
@@ -1031,7 +1429,7 @@ void __cdecl hkLuaFParser(void* L, void* ud)
     const ExoticScriptEntry* replacement = ExoticFindScript(chunk_name);
     bool do_drain = false;
     bool log_replace = false;
-    bool want_dump = mirage.Dumper && (mirage.DumpAllScripts || ExoticShouldDumpFull(chunk_name));
+    bool want_dump = mirage.Dumper && (ExoticShouldDumpFull(chunk_name) || ExoticShouldDumpChunk(chunk_name));
     {
         std::lock_guard<std::mutex> lock(exotic_mutex);
         auto& state = exotic_states[z];
@@ -1151,7 +1549,7 @@ void __cdecl hkLuaXSetInput(void* L, void* ls, ExoticZio* z, ExoticTString* sour
 
     bool do_drain = false;
     bool log_replace = false;
-    bool want_dump = mirage.Dumper && (mirage.DumpAllScripts || ExoticShouldDumpFull(chunk_name));
+    bool want_dump = mirage.Dumper && (ExoticShouldDumpFull(chunk_name) || ExoticShouldDumpChunk(chunk_name));
     {
         std::lock_guard<std::mutex> lock(exotic_mutex);
         auto& state = exotic_states[z];
@@ -1314,7 +1712,7 @@ void SetupExoticLuaHooks()
         return;
     }
 
-    if (MH_CreateHook(call_luaZ_fill, &hkLuaZFill, reinterpret_cast<LPVOID*>(&call_luaZ_fill)) != MH_OK)
+    if (!EnsureMinHookCreated(call_luaZ_fill, &hkLuaZFill, reinterpret_cast<void**>(&call_luaZ_fill), "EXOTIC_1"))
     {
         LogInFile(LOG_NAME, xorstr_("[ERROR] EXOTIC: failed to hook EXOTIC_1.\n"));
         exotic_hooks_failed = true;
@@ -1322,7 +1720,7 @@ void SetupExoticLuaHooks()
     }
     if (call_luaX_setinput)
     {
-        if (MH_CreateHook(call_luaX_setinput, &hkLuaXSetInput, reinterpret_cast<LPVOID*>(&call_luaX_setinput)) != MH_OK)
+        if (!EnsureMinHookCreated(call_luaX_setinput, &hkLuaXSetInput, reinterpret_cast<void**>(&call_luaX_setinput), "EXOTIC_2"))
         {
             LogInFile(LOG_NAME, xorstr_("[ERROR] EXOTIC: failed to hook EXOTIC_2.\n"));
             exotic_hooks_failed = true;
@@ -1331,7 +1729,7 @@ void SetupExoticLuaHooks()
     }
     else if (call_f_parser)
     {
-        if (MH_CreateHook(call_f_parser, &hkLuaFParser, reinterpret_cast<LPVOID*>(&call_f_parser)) != MH_OK)
+        if (!EnsureMinHookCreated(call_f_parser, &hkLuaFParser, reinterpret_cast<void**>(&call_f_parser), "EXOTIC_f_parser"))
         {
             LogInFile(LOG_NAME, xorstr_("[ERROR] EXOTIC: failed to hook EXOTIC_f_parser.\n"));
             exotic_hooks_failed = true;
@@ -1341,12 +1739,18 @@ void SetupExoticLuaHooks()
 
     if (call_luaD_protectedparser)
     {
-        MH_CreateHook(call_luaD_protectedparser, &hkLuaDProtectedParser, reinterpret_cast<LPVOID*>(&call_luaD_protectedparser));
+        EnsureMinHookCreated(call_luaD_protectedparser, &hkLuaDProtectedParser, reinterpret_cast<void**>(&call_luaD_protectedparser), "EXOTIC_3");
     }
     else
     {
         LogInFile(LOG_NAME, xorstr_("[WARN] EXOTIC_3 not found.\n"));
     }
-    MH_EnableHook(MH_ALL_HOOKS);
+    EnsureMinHookEnabled(call_luaZ_fill, "EXOTIC_1");
+    if (call_luaX_setinput)
+        EnsureMinHookEnabled(call_luaX_setinput, "EXOTIC_2");
+    else if (call_f_parser)
+        EnsureMinHookEnabled(call_f_parser, "EXOTIC_f_parser");
+    if (call_luaD_protectedparser)
+        EnsureMinHookEnabled(call_luaD_protectedparser, "EXOTIC_3");
     exotic_hooks_ready = true;
 }

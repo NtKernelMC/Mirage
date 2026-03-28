@@ -15,6 +15,11 @@ local debugModeEnabled = false
 local uiRenderHookActive = false
 local activatePanicMode = nil
 local lastImguiRenderAllowed = false
+local lastImguiReady = false
+local lastRenderState = ""
+local scriptWarningTimer = nil
+local uiBootstrapReady = false
+local uiBootstrapTimer = nil
 
 local ui = {
     width = 1160,
@@ -35,6 +40,14 @@ local ui = {
 local setHiddenFunctionCall
 local hiddenPcall
 
+local function debugLog(text)
+    if not mirageFunc then
+        return
+    end
+
+    mirageFunc("debugLog", tostring(text or ""))
+end
+
 local function joinPath(base, name)
     if not base or base == "" then return name end
     local tail = base:sub(-1)
@@ -44,8 +57,14 @@ local function joinPath(base, name)
     return base .. name
 end
 
-local function setupImGuiAssets()
+local function setupImGuiAssets(forceReload)
+    if forceReload then
+        ui.assetsReady = false
+    end
+
     if ui.assetsReady then return end
+
+    debugLog("setupImGuiAssets(forceReload=" .. tostring(forceReload and true or false) .. ")")
 
     local base = mirageFunc("getLuaScriptsPath") or ""
     local banner = joinPath(base, "background.jpg")
@@ -221,6 +240,19 @@ local function notifyError(text)
     pushUiMessage("ShowError", text)
 end
 
+local function pumpScriptChangeWarnings()
+    if not mirageFunc or not outputChatBox then return end
+
+    for _ = 1, 6 do
+        local warning = mirageFunc("nextScriptChangeWarning")
+        if not warning or warning == false or warning == "" then
+            break
+        end
+
+        hiddenPcall(outputChatBox, "#FF5A5A[Mirage]#E8D8D8 Lua Injector: " .. tostring(warning), 255, 255, 255, true)
+    end
+end
+
 local function notifyWarning(text)
     pushUiMessage("ShowWarning", text)
 end
@@ -359,6 +391,20 @@ end
 
 local function refreshLuaThreads()
     parseLuaThreads(mirageFunc("luaThreadList") or "")
+end
+
+local function unloadAllLuaThreadsSilently()
+    refreshLuaThreads()
+
+    for i = 1, #luaThreads do
+        local item = luaThreads[i]
+        if item and item.id and item.state == "running" then
+            hiddenPcall(mirageFunc, "luaThreadUnload", tostring(item.id))
+        end
+    end
+
+    luaThreads = {}
+    selectedThreadId = nil
 end
 
 local function applyDebugMode(state)
@@ -768,6 +814,7 @@ end
 
 local function openInjectorMenu()
     if isMirageBlocked() then
+        debugLog("openInjectorMenu blocked by antiMirage")
         return false
     end
 
@@ -779,10 +826,12 @@ local function openInjectorMenu()
     end
     mirageFunc("imgui.setString", ui.resourceKey, targetResourceName)
     refreshLuaThreads()
+    debugLog("openInjectorMenu success target=" .. tostring(targetResourceName))
     return true
 end
 
 local function closeInjectorMenu()
+    debugLog("closeInjectorMenu")
     setUiVisible(false)
 end
 
@@ -790,22 +839,74 @@ local function syncImguiRenderAllowed()
     local renderAllowed = mirageFunc("isImguiRenderAllowed")
     renderAllowed = renderAllowed and true or false
 
-    if renderAllowed ~= lastImguiRenderAllowed then
-        if renderAllowed then
+    if renderAllowed then
+        if not isGUIOpen then
+            debugLog("syncImguiRenderAllowed reopening gui")
             openInjectorMenu()
-        else
-            closeInjectorMenu()
         end
+    elseif isGUIOpen then
+        closeInjectorMenu()
+    end
+
+    if renderAllowed ~= lastImguiRenderAllowed then
+        debugLog("syncImguiRenderAllowed changed -> " .. tostring(renderAllowed))
         lastImguiRenderAllowed = renderAllowed
     end
 
     return renderAllowed
 end
 
+local function syncImguiReady()
+    local ready = mirageFunc("imgui.isReady")
+    ready = ready and true or false
+
+    if ready and not lastImguiReady then
+        setupImGuiAssets(true)
+        ui.posInitialized = false
+    end
+
+    if ready ~= lastImguiReady then
+        debugLog("syncImguiReady changed -> " .. tostring(ready))
+    end
+
+    lastImguiReady = ready
+    return ready
+end
+
+local function updateRenderState(reason)
+    if reason == lastRenderState then
+        return
+    end
+
+    lastRenderState = reason
+    debugLog("renderUnifiedUi state=" .. tostring(reason)
+        .. " gui=" .. tostring(isGUIOpen)
+        .. " renderAllowed=" .. tostring(lastImguiRenderAllowed)
+        .. " imguiReady=" .. tostring(lastImguiReady)
+        .. " block=" .. tostring(block_dumper))
+end
+
 local function renderUnifiedUi()
     local renderAllowed = syncImguiRenderAllowed()
-    if block_dumper or not renderAllowed or not isGUIOpen then return end
-    if not mirageFunc("imgui.isReady") then return end
+    local imguiReady = syncImguiReady()
+    if block_dumper then
+        updateRenderState("blocked")
+        return
+    end
+    if not renderAllowed then
+        updateRenderState("render_disallowed")
+        return
+    end
+    if not isGUIOpen then
+        updateRenderState("gui_closed")
+        return
+    end
+    if not imguiReady then
+        updateRenderState("imgui_not_ready")
+        return
+    end
+
+    updateRenderState("rendering")
 
     local sx, sy = guiGetScreenSize()
     ui.width = math.max(1160, math.floor(sx * 0.68))
@@ -835,7 +936,7 @@ local function renderUnifiedUi()
     local noTitleBar = 1 -- ImGuiWindowFlags_NoTitleBar
     local opened = mirageFunc("imgui.begin", "##mirage_unified", false, noTitleBar, "wnd_mirage_unified")
     if opened then
-        local caption = "Mirage Injector V6.8 by DroidZero"
+        local caption = "Mirage Injector V6.9 by DroidZero"
         local bannerY = 54
         drawCaptionTitle(x, y, caption, y + bannerY)
 
@@ -903,13 +1004,18 @@ local function ToggleGUI()
 end
 
 local function stopImGuiUi()
+    local hadAssets = ui.assetsReady
+    uiBootstrapReady = false
     lastImguiRenderAllowed = false
+    lastImguiReady = false
+    lastRenderState = ""
+    ui.assetsReady = false
     setUiVisible(false)
     if uiRenderHookActive then
         removeEventHandler("onClientRender", root, renderUnifiedUi)
         uiRenderHookActive = false
     end
-    if ui.assetsReady then
+    if hadAssets then
         mirageFunc("imgui.captureInput", false)
         mirageFunc("imgui.blockBinds", false)
         mirageFunc("imgui.forceCursor", false)
@@ -919,6 +1025,7 @@ local function stopImGuiUi()
 end
 
 activatePanicMode = function()
+    unloadAllLuaThreadsSilently()
     playSoundFrontEnd(11)
     block_dumper = true
     stopImGuiUi()
@@ -931,10 +1038,81 @@ end
 _G.MirageToggleInjectorMenu = ToggleGUI
 _G.MirageCloseInjectorMenu = closeInjectorMenu
 
-setupImGuiAssets()
-setUiVisible(false)
-mirageFunc("imgui.setString", ui.resourceKey, targetResourceName)
-refreshLuaThreads()
+local function bootstrapInjectorUi()
+    if uiBootstrapReady then
+        return true
+    end
+
+    if type(mirageFunc) ~= "function" then
+        return false
+    end
+
+    local ok, err = pcall(function()
+        setupImGuiAssets()
+        setUiVisible(false)
+        mirageFunc("imgui.setString", ui.resourceKey, targetResourceName)
+        refreshLuaThreads()
+
+        if isDebugViewActive then
+            local okDebug, currentFlag = hiddenPcall(isDebugViewActive)
+            if okDebug and type(currentFlag) == "boolean" then
+                debugModeEnabled = currentFlag
+            end
+        end
+
+        mirageFunc("hideFunctionCall", true)
+        mirageFunc("setDbgHook", "preFunction", evDumper, { "triggerServerEvent", "triggerLatentServerEvent" })
+        mirageFunc("hideFunctionCall", false)
+
+        if not uiRenderHookActive then
+            addEventHandler("onClientRender", root, renderUnifiedUi)
+            uiRenderHookActive = true
+        end
+
+        if not isTimer(scriptWarningTimer) then
+            scriptWarningTimer = setTimer(pumpScriptChangeWarnings, 750, 0)
+        end
+    end)
+
+    if not ok then
+        if type(mirageFunc) == "function" then
+            pcall(mirageFunc, "debugLog", "bootstrapInjectorUi failed: " .. tostring(err))
+        end
+        return false
+    end
+
+    uiBootstrapReady = true
+    debugLog("bootstrapInjectorUi success")
+    return true
+end
+
+local function ensureBootstrapTimer()
+    if uiBootstrapReady then
+        if isTimer(uiBootstrapTimer) then
+            killTimer(uiBootstrapTimer)
+        end
+        uiBootstrapTimer = nil
+        return
+    end
+
+    if isTimer(uiBootstrapTimer) then
+        return
+    end
+
+    uiBootstrapTimer = setTimer(function()
+        if bootstrapInjectorUi() then
+            if isTimer(sourceTimer) then
+                killTimer(sourceTimer)
+            end
+            uiBootstrapTimer = nil
+        end
+    end, 1000, 0)
+end
+
+if not bootstrapInjectorUi() then
+    ensureBootstrapTimer()
+end
+
 if isDebugViewActive then
     local ok, currentFlag = hiddenPcall(isDebugViewActive)
     if ok and type(currentFlag) == "boolean" then
@@ -942,14 +1120,18 @@ if isDebugViewActive then
     end
 end
 
-mirageFunc("hideFunctionCall", true)
-mirageFunc("setDbgHook", "preFunction", evDumper, { "triggerServerEvent", "triggerLatentServerEvent" })
-mirageFunc("hideFunctionCall", false)
+addEventHandler("onClientResourceStop", root, function(stoppedResource)
+    if stoppedResource ~= getThisResource() then
+        return
+    end
 
-if not uiRenderHookActive then
-    addEventHandler("onClientRender", root, renderUnifiedUi)
-    uiRenderHookActive = true
-end
+    uiBootstrapReady = false
+    if isTimer(uiBootstrapTimer) then
+        killTimer(uiBootstrapTimer)
+        uiBootstrapTimer = nil
+    end
+    unloadAllLuaThreadsSilently()
+end)
 
 addEventHandler("onClientKey", root, function(button, press)
     if not isGUIOpen then return end

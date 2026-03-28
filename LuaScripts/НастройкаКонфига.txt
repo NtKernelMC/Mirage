@@ -1,42 +1,91 @@
-LUA_INJECTION_TYPE - Способ луа инжекта
+Mirage config reference
 
-> METHOD_LUA_L_LOADBUFFER - классический луа инжект в luaL_loadbuffer (максимально быстрый и стабильный способ)
-> METHOD_LUA_LOAD - низкоуровневый луа инжект через lua_load (помогает обойти фикс в случае проверки лоадбафера)
-> METHOD_EXOTIC - экзотический луа инжект через компилятор байткода (помогает обойти фикс там где обычным способам пизда)
+Quick presets
 
-FORK_VERSION - Версия форка для совместимости миража с клиентом
+Dump one resource by name:
+> DUMPER=1
+> DUMP_RESOURCE_NAME=interfacer
+> DUMP_ALL_SCRIPTS=0
+> DUMP_ONLY_CACHED=0
 
-> FORK_VERSION_1_6 - мта 1.6.0+ (custom + unstable)
-> FORK_VERSION_1.5 - мта 1.5.9-custom
+Dump all named scripts:
+> DUMPER=1
+> DUMP_ALL_SCRIPTS=1
+> DUMP_ONLY_CACHED=0
 
-FUCK_DBG_HOOKS - Борьба с дебаг хуками луашного античита
+Dump only cached scripts:
+> DUMPER=1
+> DUMP_ONLY_CACHED=1
 
-> ALLOW_DBG_HOOKS - Не трогать дебаг хуки
-> FUCK_DBG_HOOKS - Отключить все дебаг хуки
-> PROTECTED_MODE - Отключает только дебаг хуки на loadstring, pcall, addDebugHook, triggerLatentServerEvent
-> STEALTH_MODE - Скрывает вызовы функций от всех дебаг хуков без отключения 
-Для того чтобы вызов скрыло, необходимо вызывать со стороны луа функцию mirageFunc("hideFunctionCall", true) перед вызовом одной из функций ниже и затем отрубать скрывание флагом false
-Поддержка только для функций ("addDebugHook", "removeDbgHook", "triggerServerEvent", "triggerLatentServerEvent", "addEventHandler", "loadstring", "load", "setPlayerNametagText", "setElementData", "blowVehicle")
+Important dump rules
 
-HOOKING_METHOD - тип хукера для луа инжекта
+> DUMP_ONLY_CACHED=1 ignores DUMP_RESOURCE_NAME
+> cached script = script with valid @resource\path.lua name, but no real file in game mods\deathmatch\resources
+> anonymous chunks without @ are not treated as valid cached script paths
+> garbage chunks are skipped instead of being dumped with broken file names
 
-> INLINE_JUMP - Использовать jmp хуки (MinHook), классический способ.
-> HWBP_HOOK - Использовать Harware Breakpoint Hook (Аппаратный брейкпоинт), полезно когда клиент чекает хуки на 0xE9 опкод но имейте ввиду что HWBP очень тормозной!
-> IAT - Использовать хук по таблице импорта в client.dll, не совместим с METHOD_EXOTIC! Эта техника перехвата позволяет обойти детект хука в большинстве случаев и очень шустрая в работе.
+LUA_INJECTION_TYPE - Lua injector mode.
 
-DUMPER - Включить/выключить дампер lua скриптов, достает даже скрытые в кэше.
+> METHOD_LUA_L_LOADBUFFER - fast classic hook in luaL_loadbuffer
+> METHOD_LUA_L_LOAD - lower level hook through lua_load
+> METHOD_EXOTIC - compiler/parser based mode for harder targets
 
-> 1 - Включить
-> 0 - Выключить 
+FORK_VERSION - client branch compatibility.
 
-DUMP_RESOURCE_NAME - Имя ресурса либо скрипта для дампера скриптов, например ugta_BankSystem сдампит все скрипты в ресурсе
+> FORK_VERSION_1_6 - MTA 1.6.0+
+> FORK_VERSION_1_5 - MTA 1.5.9 custom
 
-DUMP_ALL_SCRIPTS - Дампить все скрипты а не по имени ресурса
+FUCK_DBG_HOOKS - debug hook policy.
 
-> 1 - включить дамп всех скриптов
-> 0 - выключить массовый дамп
+> ALLOW_DBG_HOOKS - do not touch debug hooks
+> FUCK_DBG_HOOKS - block all debug hooks
+> PROTECTED_MODE - block only sensitive hook targets
+> STEALTH_MODE - hide Mirage function calls from debug hooks
 
-DLL_INJECTION_TYPE - тип DLL инжектора
+HOOKING_METHOD - hook backend for Lua injector.
 
-> MMAP - Manual Mapping, стелз техника для обхода обнаружения DLL в списке модулей, рекомендуется.
-> SET_WINDOWS_HOOK - Для тех случаев когда инжект мануал мапом по каким либо причинам не работает, например отвал обхода фаирплей драйвера, но имейте ввиду что клиент увидит DLL в списке!
+> INLINE_JUMP - normal JMP / MinHook style hooks
+> HWBP_HOOK - hardware breakpoint hooks
+> IAT - import table hook in client.dll, not for METHOD_EXOTIC
+
+DUMPER - enable Lua script dumper.
+
+> 1 - enable
+> 0 - disable
+
+DUMP_RESOURCE_NAME - resource or script name filter for normal named dumps.
+
+> works only when DUMP_ONLY_CACHED=0
+> example: interfacer
+
+DUMP_ALL_SCRIPTS - dump all named scripts with normal resource folders.
+
+> 1 - dump all named scripts
+> 0 - use DUMP_RESOURCE_NAME filter
+
+DUMP_ONLY_CACHED - dump only cached scripts with valid @path names.
+
+> 1 - dump only cached scripts found in Lua cache
+> 0 - allow normal named dumps too
+
+WARN_CHANGES - warn in game chat when baseline snapshot hash changed.
+
+> 1 - enable snapshot warnings in chat
+> 0 - disable chat warnings
+
+MENU_TOGGLE_VK - virtual key used to toggle ImGui Lua render.
+
+> 112 - F1
+> default = 112
+
+DLL_INJECTION_TYPE - DLL injection backend.
+
+> MMAP - manual map
+> SET_WINDOWS_HOOK - fallback visible DLL injection
+
+SET_PUBLIC - replace serial with PUBLIC_SERIAL.
+
+> 1 - enable public serial spoof
+> 0 - keep generated/private serial
+
+PUBLIC_SERIAL - serial value used when SET_PUBLIC=1.

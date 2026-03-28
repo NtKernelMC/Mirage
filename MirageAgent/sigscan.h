@@ -1,10 +1,16 @@
 #pragma once
 #include <Windows.h>
 #include <Psapi.h>
+#include <cstdlib>
+#include <string>
+#include <vector>
 #pragma comment (lib, "Psapi.lib")
+
 class SigScan
 {
 public:
+	static constexpr size_t kJumpHookSize = 5;
+
 	MODULEINFO GetModuleInfo(const char* szModule)
 	{
 		MODULEINFO modinfo = { 0 };
@@ -13,70 +19,98 @@ public:
 		K32GetModuleInformation(GetCurrentProcess(), hModule, &modinfo, sizeof(MODULEINFO));
 		return modinfo;
 	}
-    DWORD FindCallPattern(const char* module, const std::string& pattern, bool isJmp = true)
-    {
-        MODULEINFO mInfo = GetModuleInfo(module);
-        DWORD base = (DWORD)mInfo.lpBaseOfDll;
-        DWORD size = (DWORD)mInfo.SizeOfImage;
-        if (base == 0 || size == 0)
-            return NULL;
 
-        std::vector<BYTE> patternBytes;
-        std::vector<bool> patternMask;
+	void ParseIdaPattern(const std::string& pattern, std::vector<BYTE>& patternBytes, std::vector<bool>& patternMask)
+	{
+		patternBytes.clear();
+		patternMask.clear();
 
-        for (size_t i = 0; i < pattern.size(); )
-        {
-            if (pattern[i] == ' ')
-            {
-                i++;
-                continue;
-            }
-            if (pattern[i] == '?')
-            {
-                patternBytes.push_back(0x00);
-                patternMask.push_back(false);
-                if (i + 1 < pattern.size() && pattern[i + 1] == '?')
-                    i++;
-            }
-            else
-            {
-                patternBytes.push_back(static_cast<BYTE>(std::strtoul(pattern.substr(i, 2).c_str(), nullptr, 16)));
-                patternMask.push_back(true);
-                i++;
-            }
-            i++;
-        }
+		for (size_t i = 0; i < pattern.size(); )
+		{
+			if (pattern[i] == ' ')
+			{
+				i++;
+				continue;
+			}
+			if (pattern[i] == '?')
+			{
+				patternBytes.push_back(0x00);
+				patternMask.push_back(false);
+				if (i + 1 < pattern.size() && pattern[i + 1] == '?')
+					i++;
+			}
+			else
+			{
+				patternBytes.push_back(static_cast<BYTE>(std::strtoul(pattern.substr(i, 2).c_str(), nullptr, 16)));
+				patternMask.push_back(true);
+				i++;
+			}
+			i++;
+		}
+	}
 
-        if (patternBytes.empty() || size < patternBytes.size())
-            return NULL;
+	void ApplyHookAwareMask(std::vector<bool>& patternMask)
+	{
+		const size_t count = patternMask.size() < kJumpHookSize ? patternMask.size() : kJumpHookSize;
+		for (size_t i = 0; i < count; ++i)
+		{
+			patternMask[i] = false;
+		}
+	}
 
-        for (DWORD i = 0; i <= size - patternBytes.size(); i++)
-        {
-            bool found = true;
-            for (DWORD j = 0; j < patternBytes.size(); j++)
-            {
-                if (patternMask[j] && patternBytes[j] != *(BYTE*)(base + i + j))
-                {
-                    found = false;
-                    break;
-                }
-            }
-            if (found)
-            {
-                if (isJmp) // поддержка JMP сигнатур (более долговечные)
-                {
-                    DWORD addr = base + i;
-                    int32_t offset = *(int32_t*)(addr + 1);
-                    return addr + 5 + offset;
-                }
-                return base + i;
-            }
-        }
-#ifdef DEBUGGING
-        Print(xorstr_("[ERROR] %s: pattern: %s is outdated!\n"), module, pattern.c_str());
-#endif // DEBUGGING
-        return NULL;
-    }
+	DWORD FindPatternBytes(DWORD base, DWORD size, const std::vector<BYTE>& patternBytes, const std::vector<bool>& patternMask)
+	{
+		if (base == 0 || size == 0 || patternBytes.empty() || patternBytes.size() != patternMask.size() || size < patternBytes.size())
+			return NULL;
+
+		for (DWORD i = 0; i <= size - patternBytes.size(); i++)
+		{
+			bool found = true;
+			for (DWORD j = 0; j < patternBytes.size(); j++)
+			{
+				if (patternMask[j] && patternBytes[j] != *(BYTE*)(base + i + j))
+				{
+					found = false;
+					break;
+				}
+			}
+			if (found)
+				return base + i;
+		}
+
+		return NULL;
+	}
+
+	DWORD FindCallPattern(const char* module, const std::string& pattern, bool isJmp = true)
+	{
+		MODULEINFO mInfo = GetModuleInfo(module);
+		DWORD base = (DWORD)mInfo.lpBaseOfDll;
+		DWORD size = (DWORD)mInfo.SizeOfImage;
+		if (base == 0 || size == 0)
+			return NULL;
+
+		std::vector<BYTE> patternBytes;
+		std::vector<bool> patternMask;
+		ParseIdaPattern(pattern, patternBytes, patternMask);
+
+		DWORD match = FindPatternBytes(base, size, patternBytes, patternMask);
+		if (match == NULL)
+		{
+			ApplyHookAwareMask(patternMask);
+			match = FindPatternBytes(base, size, patternBytes, patternMask);
+		}
+		if (match == NULL)
+			return NULL;
+
+		if (isJmp)
+		{
+			int32_t offset = *(int32_t*)(match + 1);
+			return match + 5 + offset;
+		}
+
+		return match;
+	}
+
 	DWORD FindPattern(const char* module, const char* pattern, const char* mask)
 	{
 		MODULEINFO mInfo = GetModuleInfo(module);
@@ -84,79 +118,47 @@ public:
 		DWORD size = (DWORD)mInfo.SizeOfImage;
 		if (base == 0 || size == 0)
 			return NULL;
-		DWORD patternLength = (DWORD)strlen(mask);
+
+		const DWORD patternLength = (DWORD)strlen(mask);
 		if (patternLength == 0 || size < patternLength)
 			return NULL;
-		for (DWORD i = 0; i <= size - patternLength; i++)
+
+		std::vector<BYTE> patternBytes;
+		std::vector<bool> patternMask;
+		patternBytes.reserve(patternLength);
+		patternMask.reserve(patternLength);
+		for (DWORD i = 0; i < patternLength; ++i)
 		{
-			bool found = true;
-			for (DWORD j = 0; j < patternLength; j++)
-			{
-				found &= mask[j] == '?' || pattern[j] == *(char*)(base + i + j);
-			}
-			if (found)
-			{
-				return base + i;
-			}
+			patternBytes.push_back(static_cast<BYTE>(pattern[i]));
+			patternMask.push_back(mask[i] != '?');
 		}
-		return NULL;
+
+		DWORD match = FindPatternBytes(base, size, patternBytes, patternMask);
+		if (match != NULL)
+			return match;
+
+		ApplyHookAwareMask(patternMask);
+		return FindPatternBytes(base, size, patternBytes, patternMask);
 	}
-    DWORD FindPatternIDA(const char* module, const std::string& pattern)
-    {
-        MODULEINFO mInfo = GetModuleInfo(module);
-        if (mInfo.lpBaseOfDll == nullptr) return 0;
-        DWORD base = (DWORD)mInfo.lpBaseOfDll;
-        DWORD size = (DWORD)mInfo.SizeOfImage;
-        if (base == 0 || size == 0)
-            return NULL;
 
-        // Преобразуем строку IDA-стиля в байты и маску
-        std::vector<BYTE> patternBytes;
-        std::vector<bool> patternMask;
+	DWORD FindPatternIDA(const char* module, const std::string& pattern)
+	{
+		MODULEINFO mInfo = GetModuleInfo(module);
+		if (mInfo.lpBaseOfDll == nullptr) return 0;
+		DWORD base = (DWORD)mInfo.lpBaseOfDll;
+		DWORD size = (DWORD)mInfo.SizeOfImage;
+		if (base == 0 || size == 0)
+			return NULL;
 
-        for (size_t i = 0; i < pattern.size(); )
-        {
-            if (pattern[i] == ' ')
-            {
-                i++;
-                continue;
-            }
-            if (pattern[i] == '?')
-            {
-                patternBytes.push_back(0x00);
-                patternMask.push_back(false);
-                if (i + 1 < pattern.size() && pattern[i + 1] == '?')
-                    i++;
-            }
-            else
-            {
-                patternBytes.push_back(static_cast<BYTE>(std::strtoul(pattern.substr(i, 2).c_str(), nullptr, 16)));
-                patternMask.push_back(true);
-                i++;
-            }
-            i++;
-        }
+		std::vector<BYTE> patternBytes;
+		std::vector<bool> patternMask;
+		ParseIdaPattern(pattern, patternBytes, patternMask);
 
-        // Поиск паттерна по байтам и маске
-        if (patternBytes.empty() || size < patternBytes.size())
-            return NULL;
+		DWORD match = FindPatternBytes(base, size, patternBytes, patternMask);
+		if (match != NULL)
+			return match;
 
-        for (DWORD i = 0; i <= size - patternBytes.size(); i++)
-        {
-            bool found = true;
-            for (DWORD j = 0; j < patternBytes.size(); j++)
-            {
-                if (patternMask[j] && patternBytes[j] != *(BYTE*)(base + i + j))
-                {
-                    found = false;
-                    break;
-                }
-            }
-            if (found)
-            {
-                return base + i;
-            }
-        }
-        return NULL;
-    }
+		ApplyHookAwareMask(patternMask);
+		return FindPatternBytes(base, size, patternBytes, patternMask);
+	}
 };

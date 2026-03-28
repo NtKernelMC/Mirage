@@ -75,6 +75,9 @@ typedef struct
     bool Dumper;
     std::string dump_resource_name;
     bool DumpAllScripts;
+    bool DumpOnlyCached;
+    bool WarnChanges;
+    unsigned int MenuToggleVk;
     DllInjectionType dll_injection_type;
     bool set_public;
     std::string public_serial;
@@ -159,6 +162,9 @@ void ParseMirageConfig()
                 << xorstr_("DUMPER=0\n")
                 << xorstr_("DUMP_RESOURCE_NAME=admin\n")
                 << xorstr_("DUMP_ALL_SCRIPTS=0\n")
+                << xorstr_("DUMP_ONLY_CACHED=0\n")
+                << xorstr_("WARN_CHANGES=1\n")
+                << xorstr_("MENU_TOGGLE_VK=112\n")
                 << xorstr_("SET_PUBLIC=0\n")
                 << xorstr_("PUBLIC_SERIAL=C02D45DBE9753CF1939F0732DBAFAF71\n")
                 << xorstr_("DLL_INJECTION_TYPE=MMAP");
@@ -179,6 +185,9 @@ void ParseMirageConfig()
         }
     }
 
+    mirage.DumpOnlyCached = false;
+    mirage.WarnChanges = true;
+    mirage.MenuToggleVk = VK_F1;
     mirage.set_public = false;
     mirage.public_serial = xorstr_("C02D45DBE9753CF1939F0732DBAFAF71");
 
@@ -314,6 +323,60 @@ void ParseMirageConfig()
             catch (...)
             {
                 LogInFile(LOG_NAME, xorstr_("[LOG] Error: exception parsing DUMP_ALL_SCRIPTS!\n"));
+                continue;
+            }
+        }
+        else if (key == xorstr_("DUMP_ONLY_CACHED"))
+        {
+            try {
+                int flag = std::stoi(value);
+                if (flag == 0 || flag == 1)
+                    mirage.DumpOnlyCached = static_cast<bool>(flag);
+                else
+                {
+                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: invalid DUMP_ONLY_CACHED value!\n"));
+                    continue;
+                }
+            }
+            catch (...)
+            {
+                LogInFile(LOG_NAME, xorstr_("[LOG] Error: exception parsing DUMP_ONLY_CACHED!\n"));
+                continue;
+            }
+        }
+        else if (key == xorstr_("WARN_CHANGES"))
+        {
+            try {
+                int flag = std::stoi(value);
+                if (flag == 0 || flag == 1)
+                    mirage.WarnChanges = static_cast<bool>(flag);
+                else
+                {
+                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: invalid WARN_CHANGES value!\n"));
+                    continue;
+                }
+            }
+            catch (...)
+            {
+                LogInFile(LOG_NAME, xorstr_("[LOG] Error: exception parsing WARN_CHANGES!\n"));
+                continue;
+            }
+        }
+        else if (key == xorstr_("MENU_TOGGLE_VK"))
+        {
+            try {
+                unsigned long vk = std::stoul(value, nullptr, 0);
+                if (vk <= 0xFF)
+                    mirage.MenuToggleVk = static_cast<unsigned int>(vk);
+                else
+                {
+                    LogInFile(LOG_NAME, xorstr_("[LOG] Error: invalid MENU_TOGGLE_VK value!\n"));
+                    continue;
+                }
+            }
+            catch (...)
+            {
+                LogInFile(LOG_NAME, xorstr_("[LOG] Error: exception parsing MENU_TOGGLE_VK!\n"));
                 continue;
             }
         }

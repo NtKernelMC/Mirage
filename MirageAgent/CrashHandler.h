@@ -834,6 +834,65 @@ namespace CrashHandler
         return WriteCrashReport("Unhandled SEH exception", ep->ExceptionRecord->ExceptionCode, reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress), *ep->ContextRecord);
     }
 
+    inline void LogStatus()
+    {
+        EnsureSymbols();
+        EnsureMirageSymbols();
+
+        char modulePath[MAX_PATH]{};
+        BuildMirageModulePath(modulePath, sizeof(modulePath));
+
+        char pdbPath[MAX_PATH]{};
+        if (modulePath[0])
+        {
+            strcpy_s(pdbPath, modulePath);
+            char* dot = std::strrchr(pdbPath, '.');
+            if (dot)
+                strcpy_s(dot, MAX_PATH - static_cast<size_t>(dot - pdbPath), ".pdb");
+        }
+
+        bool pdbPresent = false;
+        if (pdbPath[0])
+            pdbPresent = GetFileAttributesA(pdbPath) != INVALID_FILE_ATTRIBUTES;
+
+        char loadedPdb[MAX_PATH]{};
+        IMAGEHLP_MODULE64 moduleInfo{};
+        moduleInfo.SizeOfStruct = sizeof(moduleInfo);
+        bool hasModuleInfo = false;
+        if (s_process && s_mirageBase)
+        {
+            hasModuleInfo = SymGetModuleInfo64(s_process, static_cast<DWORD64>(s_mirageBase), &moduleInfo) == TRUE;
+            if (hasModuleInfo && moduleInfo.LoadedPdbName[0])
+                strcpy_s(loadedPdb, moduleInfo.LoadedPdbName);
+        }
+
+        IMAGEHLP_LINE64 probeLine{};
+        probeLine.SizeOfStruct = sizeof(probeLine);
+        DWORD probeDisp = 0;
+        bool pdbProbeOk = false;
+        if (s_process)
+        {
+            pdbProbeOk = SymGetLineFromAddr64(s_process, static_cast<DWORD64>(reinterpret_cast<uintptr_t>(&LogStatus)), &probeDisp, &probeLine) == TRUE &&
+                probeLine.FileName != nullptr;
+        }
+
+        AppendLog("[CrashHandler] Status: installed=%d symbols=%d mirage_base=0x%08X mirage_size=0x%08X.\n",
+            s_installed.load() ? 1 : 0,
+            s_symbolsInitialized ? 1 : 0,
+            static_cast<unsigned int>(s_mirageBase),
+            s_mirageSize);
+        AppendLog("[CrashHandler] Mirage module path: %s\n", modulePath[0] ? modulePath : "<empty>");
+        AppendLog("[CrashHandler] Mirage pdb present: %s\n", pdbPresent ? "yes" : "no");
+        AppendLog("[CrashHandler] Mirage symbols loaded: %s\n", s_mirageSymbolsLoaded ? "yes" : "no");
+        AppendLog("[CrashHandler] Loaded pdb: %s\n", hasModuleInfo && loadedPdb[0] ? loadedPdb : "<none>");
+        AppendLog("[CrashHandler] PDB probe: %s%s%s\n",
+            pdbProbeOk ? "ok " : "failed",
+            pdbProbeOk ? probeLine.FileName : "",
+            pdbProbeOk ? ":" : "");
+        if (pdbProbeOk)
+            AppendLog("[CrashHandler] PDB probe line: %lu\n", static_cast<unsigned long>(probeLine.LineNumber));
+    }
+
     inline void Install()
     {
         if (s_installed.exchange(true))

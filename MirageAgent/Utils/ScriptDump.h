@@ -17,27 +17,152 @@ bool __stdcall IsDirectoryExists(const std::string& dirName_in)
 	if (ftyp == INVALID_FILE_ATTRIBUTES) return false;
 	if (ftyp & FILE_ATTRIBUTE_DIRECTORY) return true;
 	return false;
-};
+}
 
-std::string CleanScriptName(std::string str)
+static std::string NormalizeDumpSlashes(std::string value)
 {
-	std::string ans = str + xorstr_("\\");;
-	std::string delimiter = xorstr_("\\");
-	size_t pos = 0; std::string token;
-	while ((pos = ans.find(delimiter)) != std::string::npos)
+	for (char& ch : value)
 	{
-		token = ans.substr(0, pos);
-		ans.erase(0, pos + delimiter.length());
+		if (ch == '/') ch = '\\';
 	}
-	return token;
+	return value;
+}
+
+static std::string TrimDumpPath(std::string value)
+{
+	value = NormalizeDumpSlashes(std::move(value));
+	while (!value.empty() && (value.front() == '@' || value.front() == '\\'))
+	{
+		value.erase(value.begin());
+	}
+	if (value.size() > 2 && value[1] == ':')
+	{
+		value.erase(0, 2);
+		while (!value.empty() && value.front() == '\\')
+		{
+			value.erase(value.begin());
+		}
+	}
+	return value;
+}
+
+static std::string SanitizeDumpPart(const std::string& part)
+{
+	if (part.empty()) return {};
+	if (part == "." || part == "..") return xorstr_("_");
+
+	std::string out;
+	out.reserve(part.size());
+	for (unsigned char ch : part)
+	{
+		switch (ch)
+		{
+		case '<':
+		case '>':
+		case ':':
+		case '"':
+		case '|':
+		case '?':
+		case '*':
+			out.push_back('_');
+			break;
+		default:
+			out.push_back(ch < 32 ? '_' : static_cast<char>(ch));
+			break;
+		}
+	}
+
+	if (out.empty()) return xorstr_("_");
+	return out;
+}
+
+static std::string JoinDumpParts(const std::vector<std::string>& parts)
+{
+	std::string out;
+	for (size_t i = 0; i < parts.size(); ++i)
+	{
+		if (parts[i].empty()) continue;
+		if (!out.empty()) out.push_back('\\');
+		out.append(parts[i]);
+	}
+	return out;
+}
+
+static std::string BuildDumpRelativePath(const std::string& name, const std::string& fallback_name = {})
+{
+	std::string value = TrimDumpPath(name);
+	if (value.empty()) value = TrimDumpPath(fallback_name);
+	if (value.empty()) value = xorstr_("unknown\\chunk.lua");
+
+	std::vector<std::string> parts;
+	size_t start = 0;
+	while (start <= value.size())
+	{
+		size_t pos = value.find('\\', start);
+		std::string token = pos == std::string::npos ? value.substr(start) : value.substr(start, pos - start);
+		token = SanitizeDumpPart(token);
+		if (!token.empty()) parts.push_back(token);
+		if (pos == std::string::npos) break;
+		start = pos + 1;
+	}
+
+	std::string result = JoinDumpParts(parts);
+	if (result.empty()) return xorstr_("unknown\\chunk.lua");
+	return result;
+}
+
+static std::string DumpExtensionFromName(const std::string& name)
+{
+	std::string normalized = NormalizeDumpSlashes(name);
+	size_t pos = normalized.find_last_of('.');
+	if (pos == std::string::npos) return xorstr_(".lua");
+	std::string ext = normalized.substr(pos);
+	if (ext == xorstr_(".luac")) return ext;
+	if (ext == xorstr_(".lua")) return ext;
+	return xorstr_(".lua");
+}
+
+static std::filesystem::path BuildDumpRoot(const std::string& dir_name)
+{
+	std::filesystem::path root(lua_scripts_dir);
+	root /= dir_name;
+	std::error_code ec;
+	std::filesystem::create_directories(root, ec);
+	return root;
+}
+
+static std::string WriteDumpFile(const std::string& dir_name, const std::string& relative_path, char* buff, size_t sz)
+{
+	if (!buff || sz == 0) return {};
+
+	std::filesystem::path root = BuildDumpRoot(dir_name);
+	std::filesystem::path relative(relative_path);
+	std::filesystem::path full_path = root / relative;
+
+	std::error_code ec;
+	if (full_path.has_parent_path())
+		std::filesystem::create_directories(full_path.parent_path(), ec);
+
+	FILE* hFile = fopen(full_path.string().c_str(), xorstr_("wb"));
+	if (hFile != nullptr)
+	{
+		fwrite(buff, 1, sz, hFile);
+		fclose(hFile);
+		return full_path.string();
+	}
+
+	LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t dump file: %s\n"), full_path.string().c_str());
+	return {};
 }
 
 std::vector<std::vector<char>> dumpedChunks;
 std::unordered_set<uint32_t> dumpedChunkChecksums;
-// Simple checksum helper.
-uint32_t CalculateChecksum(const char* buff, size_t sz) {
+
+uint32_t CalculateChecksum(const char* buff, size_t sz)
+{
 	uint32_t checksum = 0;
-	for (size_t i = 0; i < sz; ++i) {
+	for (size_t i = 0; i < sz; ++i)
+	{
 		checksum = checksum * 31 + static_cast<unsigned char>(buff[i]);
 	}
 	return checksum;
@@ -45,68 +170,60 @@ uint32_t CalculateChecksum(const char* buff, size_t sz) {
 
 void RemoveOldDumpedScripts(std::string dir_name)
 {
-	char cwd[500]; memset(cwd, 0, sizeof(cwd));
-	sprintf(cwd, xorstr_("%ls\\%s"), lua_scripts_dir.c_str(), dir_name.c_str());
-	if (!IsDirectoryExists(cwd)) CreateDirectoryA(cwd, 0);
-	else
-	{
-		std::filesystem::remove_all(cwd);
-		CreateDirectoryA(cwd, 0);
-	}
-}
-
-static int g_dump_script_ctr = 1;
-
-static std::string BuildDumpPath(const std::string& dir_name, const std::string& name, int ctr)
-{
-	char ctr_buf[10]; memset(ctr_buf, 0, sizeof(ctr_buf));
-	sprintf(ctr_buf, xorstr_("a%d_"), ctr);
-	std::string clean_name = CleanScriptName(name);
-	char cwd[500]; memset(cwd, 0, sizeof(cwd));
-	sprintf(cwd, xorstr_("%ls\\%s"), lua_scripts_dir.c_str(), dir_name.c_str());
-	return cwd + std::string(xorstr_("\\")) + (ctr_buf + clean_name);
+	std::filesystem::path root(lua_scripts_dir);
+	root /= dir_name;
+	std::error_code ec;
+	if (std::filesystem::exists(root, ec))
+		std::filesystem::remove_all(root, ec);
+	std::filesystem::create_directories(root, ec);
 }
 
 std::string DumpScriptEx(std::string dir_name, std::string name, char* buff, size_t sz)
 {
-	int ctr = g_dump_script_ctr++;
-	std::string script_path = BuildDumpPath(dir_name, name, ctr);
-	FILE* hFile = fopen(script_path.c_str(), xorstr_("wb"));
-	if (hFile != nullptr)
-	{
-		fwrite(buff, 1, sz, hFile);
-		fclose(hFile);
-	}
-	else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t dump file: %s\n"), script_path.c_str());
-	return script_path;
+	const std::string relative_path = BuildDumpRelativePath(name, xorstr_("unknown\\chunk.lua"));
+	return WriteDumpFile(dir_name, relative_path, buff, sz);
 }
 
 void DumpScript(std::string dir_name, std::string name, char* buff, size_t sz)
 {
-	DumpScriptEx(dir_name, name, buff, sz);
+	DumpScriptEx(std::move(dir_name), std::move(name), buff, sz);
 }
 
-// Skip dumping chunks with a checksum that was already seen.
-std::string DumpIfNotDuplicateEx(const char* path, const char* name, char* buff, size_t sz) {
-	uint32_t currentChecksum = CalculateChecksum(buff, sz);
-
-	// If the checksum already exists, skip the dump.
-	if (dumpedChunkChecksums.find(currentChecksum) != dumpedChunkChecksums.end()) {
-		return ""; // Chunk already exists.
+static std::string BuildCachedDumpRelativePath(const std::string& name, uint32_t checksum)
+{
+	const std::string normalized = BuildDumpRelativePath(name);
+	size_t leaf_pos = normalized.find_last_of('\\');
+	std::string leaf = leaf_pos == std::string::npos ? normalized : normalized.substr(leaf_pos + 1);
+	if (!normalized.empty() &&
+		!findStringIC(leaf, xorstr_("chunk.lua")) &&
+		!findStringIC(leaf, xorstr_("chunk.luac")))
+	{
+		return normalized;
 	}
 
-	// Store the checksum to avoid duplicates.
-	dumpedChunkChecksums.insert(currentChecksum);
-
-	// Store the chunk data.
-	std::vector<char> chunk(buff, buff + sz);
-	dumpedChunks.push_back(chunk);
-
-	// Call the original dump function.
-	return DumpScriptEx(path, name, buff, sz);
+	char hash_buf[32]{};
+	sprintf(hash_buf, xorstr_("chunk_%08X"), checksum);
+	return std::string(xorstr_("cache\\")) + hash_buf + DumpExtensionFromName(name);
 }
 
-// Skip dumping chunks with a checksum that was already seen.
-void DumpIfNotDuplicate(const char* path, const char* name, char* buff, size_t sz) {
+std::string DumpIfNotDuplicateEx(const char* path, const char* name, char* buff, size_t sz)
+{
+	if (!buff || sz == 0) return {};
+
+	uint32_t currentChecksum = CalculateChecksum(buff, sz);
+	if (dumpedChunkChecksums.find(currentChecksum) != dumpedChunkChecksums.end())
+	{
+		return {};
+	}
+
+	dumpedChunkChecksums.insert(currentChecksum);
+	dumpedChunks.emplace_back(buff, buff + sz);
+
+	const std::string relative_path = BuildCachedDumpRelativePath(name ? name : xorstr_("chunk.lua"), currentChecksum);
+	return WriteDumpFile(path ? path : xorstr_("Chunks"), relative_path, buff, sz);
+}
+
+void DumpIfNotDuplicate(const char* path, const char* name, char* buff, size_t sz)
+{
 	DumpIfNotDuplicateEx(path, name, buff, sz);
 }

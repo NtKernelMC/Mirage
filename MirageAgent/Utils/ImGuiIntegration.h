@@ -215,6 +215,8 @@ static ResetSignature g_reset_original = nullptr;
 static bool g_cursor_visible_by_imgui = false;
 static std::atomic_bool g_imgui_hook_thread_running = false;
 static std::atomic_bool g_imgui_hook_thread_stop_requested = false;
+static std::atomic_bool g_imgui_client_reload_pending = false;
+static std::atomic_bool g_imgui_reload_requested = false;
 static std::atomic_uint g_imgui_dx9_hook_fail_count = 0;
 static std::atomic<DWORD> g_imgui_dx9_hook_last_fail_log = 0;
 static std::atomic_bool g_imgui_d3d_factory_hooks_installed = false;
@@ -235,6 +237,8 @@ static bool ImGuiInstallD3DFactoryHooks();
 static bool ImGuiInstallCreateDeviceHooks(IDirect3D9* direct3d);
 static bool ImGuiInstallCreateDeviceExHook(IDirect3D9Ex* direct3d_ex);
 static void ImGuiRememberDx9Device(IDirect3DDevice9* device);
+static void ImGuiNotifyClientDllReload();
+static void ImGuiHandleClientDllReload();
 static IDirect3D9* WINAPI ImGuiDirect3DCreate9Hook(UINT sdk_version);
 static HRESULT WINAPI ImGuiDirect3DCreate9ExHook(UINT sdk_version, IDirect3D9Ex** direct3d_ex);
 static HRESULT STDMETHODCALLTYPE ImGuiCreateDeviceHook(IDirect3D9* direct3d, UINT adapter, D3DDEVTYPE device_type, HWND focus_window,
@@ -289,9 +293,14 @@ static inline bool ImGuiIsInputMessage(UINT msg)
     }
 }
 
-static inline bool ImGuiIsF1Message(UINT msg, WPARAM wparam)
+static inline UINT ImGuiGetMenuToggleVk()
 {
-    if (static_cast<UINT>(wparam) != VK_F1)
+    return mirage.MenuToggleVk <= 0xFF ? static_cast<UINT>(mirage.MenuToggleVk) : VK_F1;
+}
+
+static inline bool ImGuiIsMenuToggleMessage(UINT msg, WPARAM wparam)
+{
+    if (static_cast<UINT>(wparam) != ImGuiGetMenuToggleVk())
         return false;
 
     switch (msg)
@@ -339,7 +348,7 @@ static inline bool ImGuiIsPassthroughHotkey(UINT msg, WPARAM wparam)
 
 static bool ImGuiHandleRenderToggleHotkey(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-    if (!ImGuiIsF1Message(msg, wparam))
+    if (!ImGuiIsMenuToggleMessage(msg, wparam))
         return false;
 
     if (g_imgui_initialized && ImGui::GetCurrentContext())
@@ -349,7 +358,7 @@ static bool ImGuiHandleRenderToggleHotkey(HWND hwnd, UINT msg, WPARAM wparam, LP
     {
         const bool allowed = !g_imgui_lua_render_allowed.load();
         ImGuiSetLuaRenderAllowed(allowed);
-        LogInFile(LOG_NAME, xorstr_("[LOG] ImGui Lua render %s by F1.\n"), allowed ? "enabled" : "disabled");
+        LogInFile(LOG_NAME, xorstr_("[LOG] ImGui Lua render %s by VK_%u (0x%02X).\n"), allowed ? "enabled" : "disabled", ImGuiGetMenuToggleVk(), ImGuiGetMenuToggleVk());
     }
 
     return true;
@@ -730,20 +739,30 @@ static bool ImGuiInstallD3DFactoryHooks()
 
 static void** get_function_slot(int vtable_index)
 {
-    if (vtable_index == 17 && g_imgui_present_slot)
+    if (g_imgui_device)
+    {
+        __try
+        {
+            void** table = *reinterpret_cast<void***>(g_imgui_device);
+            if (table)
+            {
+                if (vtable_index == 17)
+                    g_imgui_present_slot = &table[17];
+                else if (vtable_index == 16)
+                    g_imgui_reset_slot = &table[16];
+                return &table[vtable_index];
+            }
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+
+    if (vtable_index == 17)
         return g_imgui_present_slot;
-
-    if (vtable_index == 16 && g_imgui_reset_slot)
+    if (vtable_index == 16)
         return g_imgui_reset_slot;
-
-    if (!g_imgui_device)
-        return nullptr;
-
-    void** table = *reinterpret_cast<void***>(g_imgui_device);
-    if (!table)
-        return nullptr;
-
-    return &table[vtable_index];
+    return nullptr;
 }
 
 static std::string ImGuiLuaToUtf8(std::string input)
@@ -1690,6 +1709,21 @@ static void ImGuiDestroyContextSafe()
     }
 }
 
+static void ImGuiResetRenderContextState()
+{
+    ImGuiDestroyContextSafe();
+
+    std::lock_guard<std::mutex> lock(g_imgui_mutex);
+    for (auto& kv : g_imgui_textures)
+        ImGuiReleaseTextureResource(kv.second);
+    g_imgui_textures.clear();
+    g_imgui_fonts.clear();
+    g_imgui_code_editors.clear();
+    g_imgui_pending_fonts.clear();
+    g_imgui_pending_textures.clear();
+    g_imgui_queue.clear();
+}
+
 static void ImGuiEnsureWndProcHook(IDirect3DDevice9* device)
 {
     if (!device)
@@ -1772,6 +1806,8 @@ static bool ImGuiInitialize(IDirect3DDevice9* device)
 
 static HRESULT __stdcall ImGuiResetHook(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params)
 {
+    ImGuiRememberDx9Device(device);
+
     if (g_imgui_initialized)
         ImGui_ImplDX9_InvalidateDeviceObjects();
 
@@ -1785,6 +1821,15 @@ static HRESULT __stdcall ImGuiResetHook(IDirect3DDevice9* device, D3DPRESENT_PAR
 
 static HRESULT __stdcall ImGuiPresentHook(IDirect3DDevice9* device, const RECT* src_rect, const RECT* dst_rect, HWND dst_wnd, const RGNDATA* dirty_region)
 {
+    ImGuiRememberDx9Device(device);
+
+    if (g_imgui_reload_requested.exchange(false))
+    {
+        ImGuiResetRenderContextState();
+        g_imgui_device = device;
+        LogInFile(LOG_NAME, xorstr_("[LOG] ImGui render context reset after client.dll reload.\n"));
+    }
+
     if (!g_imgui_initialized)
     {
         ImGuiInitialize(device);
@@ -1792,7 +1837,6 @@ static HRESULT __stdcall ImGuiPresentHook(IDirect3DDevice9* device, const RECT* 
 
     if (g_imgui_initialized)
     {
-        g_imgui_device = device;
         ImGuiEnsureWndProcHook(device);
 
         ImGuiUpdateSystemCursor();
@@ -1896,6 +1940,9 @@ static DWORD WINAPI ImGuiHookInstallThread(LPVOID)
 {
     while (!g_imgui_hook_thread_stop_requested)
     {
+        if (g_imgui_client_reload_pending.exchange(false))
+            ImGuiHandleClientDllReload();
+
         if (!g_imgui_d3d_factory_hooks_installed)
             ImGuiInstallD3DFactoryHooks();
 
@@ -1928,6 +1975,45 @@ static void StartImGuiHookingAsync()
         CloseHandle(h_thread);
     else
         g_imgui_hook_thread_running = false;
+}
+
+static void ImGuiNotifyClientDllReload()
+{
+    g_imgui_client_reload_pending = true;
+    StartImGuiHookingAsync();
+}
+
+static void ImGuiHandleClientDllReload()
+{
+    bool had_device = false;
+
+    {
+        std::lock_guard<std::mutex> lock(g_imgui_hook_state_mutex);
+        had_device = g_imgui_device != nullptr;
+        g_present_vtbl_hook.remove();
+        g_reset_vtbl_hook.remove();
+        g_present_original = nullptr;
+        g_reset_original = nullptr;
+        g_imgui_hooks_installed = false;
+        g_imgui_present_slot = nullptr;
+        g_imgui_reset_slot = nullptr;
+    }
+    g_imgui_reload_requested = true;
+
+    if (had_device)
+        LogInFile(LOG_NAME, xorstr_("[WARN] client.dll reload detected, refreshing ImGui DX9 hooks.\n"));
+    else
+        LogInFile(LOG_NAME, xorstr_("[LOG] client.dll reload detected before DX9 device capture.\n"));
+
+    if (!had_device || !InstallDx9Hooks())
+        StartImGuiHookingAsync();
+
+    if (g_imgui_device && !ImGuiIsWndProcHookAlive())
+    {
+        ImGuiEnsureWndProcHook(g_imgui_device);
+        if (ImGuiIsWndProcHookAlive())
+            LogInFile(LOG_NAME, xorstr_("[LOG] ImGui WndProc hook restored after client.dll reload.\n"));
+    }
 }
 
 static void ImGuiEnsureHooksForLuaInvoke()
