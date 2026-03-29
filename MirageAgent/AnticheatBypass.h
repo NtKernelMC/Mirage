@@ -229,15 +229,6 @@ namespace ModernBypass
 		unsigned int packetId = rawPacketId;
 		const unsigned int PACKET_RAK_ADDED_TO_ID = 99;
 
-		int prevBudget = g_rakpeer_queue_log_budget.fetch_sub(1);
-		if (prevBudget > 0)
-		{
-			if (packetId >= PACKET_RAK_ADDED_TO_ID)
-				LogInFile(LOG_NAME, xorstr_("[LOG] RakPeer_QueueBufferedPacket hit. raw=%u decoded=%u bits=%d\n"), rawPacketId, packetId - PACKET_RAK_ADDED_TO_ID, bitLength);
-			else
-				LogInFile(LOG_NAME, xorstr_("[LOG] RakPeer_QueueBufferedPacket hit. raw=%u bits=%d\n"), rawPacketId, bitLength);
-		}
-
 		if (!packetId || packetId < PACKET_RAK_ADDED_TO_ID) return 1;
 		packetId -= PACKET_RAK_ADDED_TO_ID;
 		//LogInFile(LOG_NAME, xorstr_("[LOG] RakPeer_QueueBufferedPacket PacketID: %d\n"), packetId);

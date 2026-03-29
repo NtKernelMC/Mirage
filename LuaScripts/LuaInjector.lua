@@ -1,4 +1,5 @@
 local isGUIOpen = false
+local wantsGUIOpen = false
 local currentTab = "injector"
 local last_code = ""
 local block_dumper = false
@@ -815,9 +816,11 @@ end
 local function openInjectorMenu()
     if isMirageBlocked() then
         debugLog("openInjectorMenu blocked by antiMirage")
+        wantsGUIOpen = false
         return false
     end
 
+    wantsGUIOpen = true
     setUiVisible(true)
     currentTab = "injector"
     targetResourceName = trimText(targetResourceName)
@@ -830,27 +833,36 @@ local function openInjectorMenu()
     return true
 end
 
-local function closeInjectorMenu()
-    debugLog("closeInjectorMenu")
+local function hideInjectorMenu()
+    debugLog("hideInjectorMenu")
     setUiVisible(false)
 end
 
+local function closeInjectorMenu()
+    debugLog("closeInjectorMenu")
+    wantsGUIOpen = false
+    hideInjectorMenu()
+end
+
 local function syncImguiRenderAllowed()
-    local renderAllowed = mirageFunc("isImguiRenderAllowed")
+    local renderAllowed = mirageFunc("isImguiHotkeyRenderAllowed")
     renderAllowed = renderAllowed and true or false
 
+    if renderAllowed ~= lastImguiRenderAllowed then
+        debugLog("syncImguiRenderAllowed changed -> " .. tostring(renderAllowed))
+        if renderAllowed then
+            wantsGUIOpen = true
+        end
+        lastImguiRenderAllowed = renderAllowed
+    end
+
     if renderAllowed then
-        if not isGUIOpen then
+        if wantsGUIOpen and not isGUIOpen then
             debugLog("syncImguiRenderAllowed reopening gui")
             openInjectorMenu()
         end
     elseif isGUIOpen then
-        closeInjectorMenu()
-    end
-
-    if renderAllowed ~= lastImguiRenderAllowed then
-        debugLog("syncImguiRenderAllowed changed -> " .. tostring(renderAllowed))
-        lastImguiRenderAllowed = renderAllowed
+        hideInjectorMenu()
     end
 
     return renderAllowed
@@ -936,13 +948,13 @@ local function renderUnifiedUi()
     local noTitleBar = 1 -- ImGuiWindowFlags_NoTitleBar
     local opened = mirageFunc("imgui.begin", "##mirage_unified", false, noTitleBar, "wnd_mirage_unified")
     if opened then
-        local caption = "Mirage Injector V6.9 by DroidZero"
+        local caption = "Mirage Injector V7.0 by DroidZero"
         local bannerY = 54
         drawCaptionTitle(x, y, caption, y + bannerY)
 
         mirageFunc("imgui.setCursorPos", ui.width - 42, 14)
         if mirageFunc("imgui.gradientButton", "X", 24, 20, 108, 20, 32, 246, 186, 38, 56, 255, 6, "wnd_btn_close") then
-            setUiVisible(false)
+            closeInjectorMenu()
         end
 
         mirageFunc("imgui.setCursorPos", 14, bannerY)
@@ -982,7 +994,7 @@ local function renderUnifiedUi()
         end
         popTabTheme()
     else
-        setUiVisible(false)
+        hideInjectorMenu()
     end
 
     mirageFunc("imgui.end")
@@ -995,7 +1007,7 @@ local function ToggleGUI()
         return true
     end
 
-    local renderAllowed = mirageFunc("isImguiRenderAllowed")
+    local renderAllowed = mirageFunc("isImguiHotkeyRenderAllowed")
     if not renderAllowed then
         return false
     end
@@ -1006,6 +1018,7 @@ end
 local function stopImGuiUi()
     local hadAssets = ui.assetsReady
     uiBootstrapReady = false
+    wantsGUIOpen = false
     lastImguiRenderAllowed = false
     lastImguiReady = false
     lastRenderState = ""

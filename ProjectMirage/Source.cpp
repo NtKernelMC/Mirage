@@ -116,7 +116,7 @@ void SetMirageDirs()
 }
 int main()
 {
-	SetConsoleTitleA(xorstr_("Mirage Injector V6.9 by DroidZero"));
+	SetConsoleTitleA(xorstr_("Mirage Injector V7.0 by DroidZero"));
 	SetConsoleOutputCP(CP_UTF8);
 	SetConsoleCP(CP_UTF8);
 	if (!setlocale(LC_ALL, ".UTF-8"))

@@ -7,7 +7,8 @@ Important:
 4) Text is passed to ImGui as-is. There is no automatic transcoding.
 5) `imgui.ini` is stored in `%LOCALAPPDATA%\Temp\Mirage\imgui.ini`.
 6) `F1` is owned by Mirage `WndProc`. Do not bind `F1` in Lua.
-7) Gate Lua rendering with `mirageFunc("isImguiRenderAllowed")` or `mirageFunc("imgui.isRenderAllowed")`.
+7) `mirageFunc("isImguiRenderAllowed")` now means "any Lua ImGui render path is active".
+8) For the Mirage hotkey (`F1`) state only, use `mirageFunc("isImguiHotkeyRenderAllowed")` or `mirageFunc("imgui.isHotkeyRenderAllowed")`.
 
 ------------------------------------------------------------
 Basic control
@@ -17,6 +18,10 @@ Basic control
 `mirageFunc("imgui.isVisible") -> bool`
 `mirageFunc("imgui.isRenderAllowed") -> bool`
 `mirageFunc("isImguiRenderAllowed") -> bool`
+`mirageFunc("imgui.isHotkeyRenderAllowed") -> bool`
+`mirageFunc("isImguiHotkeyRenderAllowed") -> bool`
+`mirageFunc("imgui.menuOpen", "menu_key", true/false) -> bool`
+`mirageFunc("imgui.isMenuOpen", "menu_key") -> bool`
 `mirageFunc("imgui.captureInput", true/false)`
 `mirageFunc("imgui.blockBinds", true/false)`
 `mirageFunc("imgui.forceCursor", true/false)`
@@ -28,6 +33,10 @@ Recommended menu setup:
 `imgui.blockBinds = true`
 `imgui.forceCursor = true`
 `imgui.drawCursor = true`
+
+Recommended for standalone menus:
+`imgui.enable = true`
+`imgui.menuOpen("unique_menu_key", true)`
 
 ------------------------------------------------------------
 Windows and layout
@@ -140,8 +149,8 @@ Draw list primitives
 ------------------------------------------------------------
 Mini example
 ------------------------------------------------------------
-`if not mirageFunc("isImguiRenderAllowed") then return end`
 `mirageFunc("imgui.enable", true)`
+`mirageFunc("imgui.menuOpen", "main_menu", true)`
 `mirageFunc("imgui.captureInput", true)`
 `mirageFunc("imgui.blockBinds", true)`
 `mirageFunc("imgui.forceCursor", true)`
