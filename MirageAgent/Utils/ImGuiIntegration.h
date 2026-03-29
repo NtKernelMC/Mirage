@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstdarg>
+#include <unordered_set>
 
 #pragma comment(lib, "d3d9.lib")
 #pragma comment(lib, "d3dx9.lib")
@@ -180,6 +181,7 @@ static std::atomic_bool g_imgui_capture_input = false;
 static std::atomic_bool g_imgui_block_mta_binds = false;
 static std::atomic_bool g_imgui_force_cursor = false;
 static std::atomic_bool g_imgui_draw_cursor = false;
+static std::atomic_int g_imgui_menu_request_count = 0;
 static std::atomic_int g_imgui_theme_request = -1; // 0 dark, 1 light, 2 classic
 static std::string g_imgui_ini_path;
 
@@ -193,6 +195,7 @@ static std::unordered_map<std::string, std::string> g_imgui_string_state;
 static std::unordered_map<std::string, bool> g_imgui_pulse_state;
 static std::unordered_map<std::string, ImGuiTextureResource> g_imgui_textures;
 static std::unordered_map<std::string, ImFont*> g_imgui_fonts;
+static std::unordered_set<std::string> g_imgui_menu_requests;
 static std::vector<ImGuiFontRequest> g_imgui_pending_fonts;
 static std::vector<ImGuiTextureRequest> g_imgui_pending_textures;
 
@@ -247,24 +250,73 @@ static HRESULT STDMETHODCALLTYPE ImGuiCreateDeviceExHook(IDirect3D9Ex* direct3d,
     DWORD behavior_flags, D3DPRESENT_PARAMETERS* presentation_parameters, D3DDISPLAYMODEEX* fullscreen_display_mode,
     IDirect3DDevice9Ex** returned_device);
 
-static inline bool ImGuiIsLuaRenderAllowed()
+static void ImGuiResetLuaInteractionState(bool clear_queue)
 {
-    return g_imgui_render_enabled && g_imgui_lua_render_allowed;
-}
-
-static void ImGuiSetLuaRenderAllowed(bool allowed)
-{
-    g_imgui_lua_render_allowed = allowed;
-    if (allowed)
-        return;
-
     g_imgui_capture_input = false;
     g_imgui_block_mta_binds = false;
     g_imgui_force_cursor = false;
     g_imgui_draw_cursor = false;
 
+    if (!clear_queue)
+        return;
+
     std::lock_guard<std::mutex> lock(g_imgui_mutex);
     g_imgui_queue.clear();
+}
+
+static inline bool ImGuiHasLuaMenuRequests()
+{
+    return g_imgui_menu_request_count.load() > 0;
+}
+
+static inline bool ImGuiIsLuaHotkeyRenderAllowed()
+{
+    return g_imgui_render_enabled && g_imgui_lua_render_allowed;
+}
+
+static inline bool ImGuiIsLuaRenderAllowed()
+{
+    return ImGuiIsLuaHotkeyRenderAllowed() || (g_imgui_render_enabled && ImGuiHasLuaMenuRequests());
+}
+
+static bool ImGuiSetLuaMenuRequest(const std::string& key, bool active)
+{
+    if (key.empty())
+        return false;
+
+    {
+        std::lock_guard<std::mutex> lock(g_imgui_mutex);
+        if (active)
+        {
+            if (g_imgui_menu_requests.insert(key).second)
+                ++g_imgui_menu_request_count;
+        }
+        else if (g_imgui_menu_requests.erase(key) > 0 && g_imgui_menu_request_count.load() > 0)
+        {
+            --g_imgui_menu_request_count;
+        }
+    }
+
+    if (!ImGuiIsLuaRenderAllowed())
+        ImGuiResetLuaInteractionState(true);
+
+    return true;
+}
+
+static bool ImGuiIsLuaMenuRequested(const std::string& key)
+{
+    if (key.empty())
+        return false;
+
+    std::lock_guard<std::mutex> lock(g_imgui_mutex);
+    return g_imgui_menu_requests.find(key) != g_imgui_menu_requests.end();
+}
+
+static void ImGuiSetLuaRenderAllowed(bool allowed)
+{
+    g_imgui_lua_render_allowed = allowed;
+    if (!ImGuiIsLuaRenderAllowed())
+        ImGuiResetLuaInteractionState(true);
 }
 
 static inline bool ImGuiIsInputMessage(UINT msg)
@@ -370,6 +422,7 @@ static LRESULT CALLBACK ImGuiWndProcHook(HWND hwnd, UINT msg, WPARAM wparam, LPA
         return 1;
 
     bool should_handle = g_imgui_initialized &&
+        ImGuiIsLuaRenderAllowed() &&
         (g_imgui_capture_input || g_imgui_force_cursor || g_imgui_block_mta_binds);
 
     if (should_handle && ImGui::GetCurrentContext())
@@ -855,6 +908,14 @@ static std::string ImGuiLuaNormalizeKey(const std::string& preferred, const std:
     return preferred.empty() ? fallback : preferred;
 }
 
+static std::string ImGuiLuaBuildLabel(const std::string& label, const std::string& key)
+{
+    if (key.empty() || key == label)
+        return label;
+
+    return label + "##" + key;
+}
+
 static bool ImGuiLuaReadBool(const std::string& key, bool fallback)
 {
     std::lock_guard<std::mutex> lock(g_imgui_mutex);
@@ -1326,10 +1387,11 @@ static void ImGuiExecuteLuaQueue()
         {
             bool open = ImGuiLuaReadBool(cmd.key, true);
             bool visible = false;
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
             if (cmd.b1)
-                visible = ImGui::Begin(cmd.label.c_str(), &open, cmd.i1);
+                visible = ImGui::Begin(widget_label.c_str(), &open, cmd.i1);
             else
-                visible = ImGui::Begin(cmd.label.c_str(), nullptr, cmd.i1);
+                visible = ImGui::Begin(widget_label.c_str(), nullptr, cmd.i1);
             ImGuiLuaWriteBool(cmd.key, open);
             const ImVec2 wnd_pos = ImGui::GetWindowPos();
             const ImVec2 wnd_size = ImGui::GetWindowSize();
@@ -1345,7 +1407,8 @@ static void ImGuiExecuteLuaQueue()
             break;
         case ImGuiLuaCommandType::BeginChild:
         {
-            bool active = ImGui::BeginChild(cmd.label.c_str(), ImVec2(cmd.f1, cmd.f2), cmd.b1, cmd.i1);
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+            bool active = ImGui::BeginChild(widget_label.c_str(), ImVec2(cmd.f1, cmd.f2), cmd.b1, cmd.i1);
             ImGuiLuaSetPulse(cmd.key + "#visible", active);
             break;
         }
@@ -1354,7 +1417,8 @@ static void ImGuiExecuteLuaQueue()
             break;
         case ImGuiLuaCommandType::BeginTabBar:
         {
-            bool active = ImGui::BeginTabBar(cmd.label.c_str(), cmd.i1);
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+            bool active = ImGui::BeginTabBar(widget_label.c_str(), cmd.i1);
             tab_bar_stack.push_back(active);
             if (!active)
                 ++inactive_tab_bar_depth;
@@ -1383,7 +1447,8 @@ static void ImGuiExecuteLuaQueue()
             }
 
             bool open = ImGuiLuaReadBool(cmd.key, true);
-            bool active = ImGui::BeginTabItem(cmd.label.c_str(), cmd.b1 ? &open : nullptr, cmd.i1);
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+            bool active = ImGui::BeginTabItem(widget_label.c_str(), cmd.b1 ? &open : nullptr, cmd.i1);
             tab_item_stack.push_back(active);
             if (!active)
                 ++inactive_tab_item_depth;
@@ -1437,7 +1502,8 @@ static void ImGuiExecuteLuaQueue()
             break;
         case ImGuiLuaCommandType::Button:
         {
-            bool clicked = ImGui::Button(cmd.label.c_str(), ImVec2(cmd.f1, cmd.f2));
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+            bool clicked = ImGui::Button(widget_label.c_str(), ImVec2(cmd.f1, cmd.f2));
             ImGuiLuaSetPulse(cmd.key, clicked);
             break;
         }
@@ -1500,14 +1566,16 @@ static void ImGuiExecuteLuaQueue()
         }
         case ImGuiLuaCommandType::SmallButton:
         {
-            bool clicked = ImGui::SmallButton(cmd.label.c_str());
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+            bool clicked = ImGui::SmallButton(widget_label.c_str());
             ImGuiLuaSetPulse(cmd.key, clicked);
             break;
         }
         case ImGuiLuaCommandType::Checkbox:
         {
             bool value = ImGuiLuaReadBool(cmd.key, cmd.b1);
-            ImGui::Checkbox(cmd.label.c_str(), &value);
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+            ImGui::Checkbox(widget_label.c_str(), &value);
             ImGuiLuaWriteBool(cmd.key, value);
             break;
         }
@@ -1515,7 +1583,8 @@ static void ImGuiExecuteLuaQueue()
         {
             float value = ImGuiLuaReadFloat(cmd.key, cmd.f3);
             const char* fmt = cmd.payload.empty() ? "%.3f" : cmd.payload.c_str();
-            ImGui::SliderFloat(cmd.label.c_str(), &value, cmd.f1, cmd.f2, fmt);
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+            ImGui::SliderFloat(widget_label.c_str(), &value, cmd.f1, cmd.f2, fmt);
             ImGuiLuaWriteFloat(cmd.key, value);
             break;
         }
@@ -1523,7 +1592,8 @@ static void ImGuiExecuteLuaQueue()
         {
             int value = ImGuiLuaReadInt(cmd.key, cmd.i2);
             const char* fmt = cmd.payload.empty() ? "%d" : cmd.payload.c_str();
-            ImGui::SliderInt(cmd.label.c_str(), &value, cmd.i1, static_cast<int>(cmd.f1), fmt);
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+            ImGui::SliderInt(widget_label.c_str(), &value, cmd.i1, static_cast<int>(cmd.f1), fmt);
             ImGuiLuaWriteInt(cmd.key, value);
             break;
         }
@@ -1533,7 +1603,8 @@ static void ImGuiExecuteLuaQueue()
             const int max_len = (cmd.i1 <= 1) ? 256 : cmd.i1;
             std::vector<char> buf(static_cast<size_t>(max_len), '\0');
             std::snprintf(buf.data(), buf.size(), "%s", current.c_str());
-            ImGui::InputText(cmd.label.c_str(), buf.data(), buf.size(), cmd.i2);
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+            ImGui::InputText(widget_label.c_str(), buf.data(), buf.size(), cmd.i2);
             ImGuiLuaWriteString(cmd.key, std::string(buf.data()));
             break;
         }
@@ -1543,7 +1614,8 @@ static void ImGuiExecuteLuaQueue()
             const int max_len = (cmd.i1 <= 1) ? 4096 : cmd.i1;
             std::vector<char> buf(static_cast<size_t>(max_len), '\0');
             std::snprintf(buf.data(), buf.size(), "%s", current.c_str());
-            ImGui::InputTextMultiline(cmd.label.c_str(), buf.data(), buf.size(), ImVec2(cmd.f1, cmd.f2), cmd.i2);
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+            ImGui::InputTextMultiline(widget_label.c_str(), buf.data(), buf.size(), ImVec2(cmd.f1, cmd.f2), cmd.i2);
             ImGuiLuaWriteString(cmd.key, std::string(buf.data()));
             break;
         }
@@ -1563,7 +1635,8 @@ static void ImGuiExecuteLuaQueue()
                     break;
             }
 
-            if (!ImGuiLuaCodeEditorRenderSafe(&state, cmd.label.c_str(), cmd.f1, cmd.f2, cmd.key.c_str()))
+            const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+            if (!ImGuiLuaCodeEditorRenderSafe(&state, widget_label.c_str(), cmd.f1, cmd.f2, cmd.key.c_str()))
                 break;
 
             std::string edited;
@@ -1588,7 +1661,8 @@ static void ImGuiExecuteLuaQueue()
             int idx = ImGuiLuaReadInt(cmd.key, cmd.i1);
             if (!citems.empty())
             {
-                ImGui::Combo(cmd.label.c_str(), &idx, citems.data(), static_cast<int>(citems.size()));
+                const std::string widget_label = ImGuiLuaBuildLabel(cmd.label, cmd.key);
+                ImGui::Combo(widget_label.c_str(), &idx, citems.data(), static_cast<int>(citems.size()));
                 ImGuiLuaWriteInt(cmd.key, idx);
             }
             break;
@@ -1719,9 +1793,11 @@ static void ImGuiResetRenderContextState()
     g_imgui_textures.clear();
     g_imgui_fonts.clear();
     g_imgui_code_editors.clear();
+    g_imgui_menu_requests.clear();
     g_imgui_pending_fonts.clear();
     g_imgui_pending_textures.clear();
     g_imgui_queue.clear();
+    g_imgui_menu_request_count = 0;
 }
 
 static void ImGuiEnsureWndProcHook(IDirect3DDevice9* device)
@@ -2079,9 +2155,12 @@ static void ShutdownImGuiHooking()
         g_imgui_textures.clear();
         g_imgui_fonts.clear();
         g_imgui_code_editors.clear();
+        g_imgui_menu_requests.clear();
         g_imgui_pending_fonts.clear();
         g_imgui_pending_textures.clear();
     }
+
+    g_imgui_menu_request_count = 0;
 
     if (g_cursor_visible_by_imgui)
     {
@@ -2098,7 +2177,8 @@ static void ShutdownImGuiHooking()
 static bool HandleImGuiInvoke(void* lua_vm, const std::string& func_name)
 {
     const bool is_render_allowed_query = findStringIC(func_name, xorstr_("isimguirenderallowed"));
-    if (!is_render_allowed_query && !findStringIC(func_name, xorstr_("imgui")))
+    const bool is_hotkey_render_allowed_query = findStringIC(func_name, xorstr_("isimguihotkeyrenderallowed"));
+    if (!is_render_allowed_query && !is_hotkey_render_allowed_query && !findStringIC(func_name, xorstr_("imgui")))
         return false;
 
     call_lua_remove(lua_vm, 1);
@@ -2109,6 +2189,11 @@ static bool HandleImGuiInvoke(void* lua_vm, const std::string& func_name)
         call_pushboolean(lua_vm, ImGuiIsLuaRenderAllowed() ? 1 : 0);
         return true;
     }
+    if (is_hotkey_render_allowed_query || findStringIC(func_name, xorstr_("imgui.ishotkeyrenderallowed")))
+    {
+        call_pushboolean(lua_vm, ImGuiIsLuaHotkeyRenderAllowed() ? 1 : 0);
+        return true;
+    }
     if (findStringIC(func_name, xorstr_("imgui.isready")))
     {
         call_pushboolean(lua_vm, g_imgui_initialized ? 1 : 0);
@@ -2117,7 +2202,22 @@ static bool HandleImGuiInvoke(void* lua_vm, const std::string& func_name)
     if (findStringIC(func_name, xorstr_("imgui.enable")) || findStringIC(func_name, xorstr_("imgui.setvisible")))
     {
         g_imgui_render_enabled = ImGuiLuaGetArgBool(lua_vm, 1, true);
+        if (!g_imgui_render_enabled)
+            ImGuiResetLuaInteractionState(true);
         call_pushboolean(lua_vm, true);
+        return true;
+    }
+    if (findStringIC(func_name, xorstr_("imgui.menuopen")) || findStringIC(func_name, xorstr_("imgui.setmenuopen")))
+    {
+        std::string key = ImGuiLuaGetArgString(lua_vm, 1, {}, true);
+        bool active = ImGuiLuaGetArgBool(lua_vm, 2, true);
+        call_pushboolean(lua_vm, ImGuiSetLuaMenuRequest(key, active) ? 1 : 0);
+        return true;
+    }
+    if (findStringIC(func_name, xorstr_("imgui.ismenuopen")))
+    {
+        std::string key = ImGuiLuaGetArgString(lua_vm, 1, {}, true);
+        call_pushboolean(lua_vm, ImGuiIsLuaMenuRequested(key) ? 1 : 0);
         return true;
     }
     if (findStringIC(func_name, xorstr_("imgui.isvisible")))
