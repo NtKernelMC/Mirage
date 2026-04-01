@@ -948,7 +948,7 @@ local function renderUnifiedUi()
     local noTitleBar = 1 -- ImGuiWindowFlags_NoTitleBar
     local opened = mirageFunc("imgui.begin", "##mirage_unified", false, noTitleBar, "wnd_mirage_unified")
     if opened then
-        local caption = "Mirage Injector V7.0 by DroidZero"
+        local caption = "Mirage Injector V7.1 by DroidZero"
         local bannerY = 54
         drawCaptionTitle(x, y, caption, y + bannerY)
 

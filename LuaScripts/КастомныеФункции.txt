@@ -391,7 +391,7 @@ if ok then
     outputChatBox("VehiclePushSync отправлен")
 end
 
-45) sendUnoccupiedVehicleSync(vehicle, x, y, z, trailer[, engineOn, derailed, isInWater, timeContext])
+45) sendUnoccupiedVehicleSync(vehicle, x, y, z, trailer[, engineOn, derailed, isInWater, timeContext, hp])
 Назначение: отправляет пакет `PACKET_ID_UNOCCUPIED_VEHICLE_SYNC` с позицией транспорта и трейлером.
 Аргументы:
 - vehicle (элемент транспорта MTA; userdata)
@@ -399,10 +399,11 @@ end
 - trailer (элемент трейлера или `nil` для detach)
 - engineOn, derailed, isInWater (optional boolean; по умолчанию `false`)
 - timeContext (optional number 0..255; по умолчанию `0`)
+- hp (optional number; если указан, здоровье тоже уйдёт в пакет)
 Примечание: если `trailer` передан как валидный элемент, функция дополнительно включает sync velocity и отправляет скорость `0, 30, 0`.
 Возврат: boolean.
 Пример:
-local ok = mirageFunc("sendUnoccupiedVehicleSync", someVehicle, 100.0, 200.0, 10.0, someTrailer, true, false, false, 0)
+local ok = mirageFunc("sendUnoccupiedVehicleSync", someVehicle, 100.0, 200.0, 10.0, someTrailer, true, false, false, 0, getElementHealth(someVehicle))
 if ok then
     outputChatBox("UnoccupiedVehicleSync отправлен")
 end

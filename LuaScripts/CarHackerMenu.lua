@@ -1,4 +1,4 @@
-local MENU_TITLE = "Car Hacker by DroidZero"
+local MENU_TITLE = "Car Hacker V2 by DroidZero"
 
 local RESOURCES_ROOT = "C:/Program Files (x86)/UKRAINEGTA/game/mods/deathmatch/resources"
 local VEHICLE_CONFIG_PATH = RESOURCES_ROOT .. "/interfacer/Extend/ShVehicleConfig.lua"
@@ -99,6 +99,9 @@ local state = {
 	selectedIndex = 0,
 	currentPage = 1,
 	selectedVehicle = nil,
+	stealthMode = false,
+	noRedFines = false,
+	superEvac = false,
 	previewPath = nil,
 	previewLoaded = false,
 	statusText = "Use Update List to scan empty road cars.",
@@ -940,12 +943,37 @@ local function teleportToSelected()
 		end
 
 		mirageFunc("sendVehiclePushSync", vehicle)
-		mirageFunc("sendUnoccupiedVehicleSync", vehicle, lx, vehicleY, lz, nil)
+		mirageFunc("sendUnoccupiedVehicleSync", vehicle, lx, vehicleY, lz, nil, false, false, false, 0, getElementHealth(vehicle))
 		setElementPosition(vehicle, lx, vehicleY, lz)
 		SafeTP(lx, playerY, lz, 0, 0)
 		setCameraTarget(localPlayer)
 		notify(("Vehicle pulled: [%d] %s"):format(item.model, item.name), 120, 255, 180)
 	end, TELEPORT_PULL_DELAY, 1)
+end
+
+local function buildGpsRouteToSelected()
+	local item = getSelectedItem()
+	if not item then
+		notify("Select a car first.", 255, 120, 120)
+		return
+	end
+
+	local vehicle = item.vehicle
+	if not isElement(vehicle) then
+		notify("Selected vehicle is gone already.", 255, 120, 120)
+		refreshVehicleList()
+		return
+	end
+
+	local x, y, z = getElementPosition(vehicle)
+	triggerEvent("onClientTryGenerateGPSPath", root, {
+		x = x,
+		y = y,
+		z = z,
+		vehicle = vehicle,
+	}, false)
+
+	notify(("GPS route set: [%d] %s"):format(item.model, item.name), 120, 255, 180)
 end
 
 local function buyMasterKeys()
@@ -1074,8 +1102,8 @@ local function renderPreviewPane(width, height)
 	end
 
 	mirageFunc("imgui.sameLine")
-	if gradientButton("Teleport", buttonW, 42, "carhack_btn_tp", { 12, 86, 54, 245 }, { 54, 220, 146, 255 }) then
-		teleportToSelected()
+	if gradientButton("GPS Route", buttonW, 42, "carhack_btn_gps_route", { 12, 86, 54, 245 }, { 54, 220, 146, 255 }) then
+		buildGpsRouteToSelected()
 	end
 
 	if gradientButton("Buy Master Keys", buttonW, 42, "carhack_btn_buy_keys", { 34, 82, 16, 245 }, { 132, 236, 76, 255 }) then
@@ -1085,6 +1113,9 @@ local function renderPreviewPane(width, height)
 	mirageFunc("imgui.sameLine")
 	if gradientButton("Crack Lock", buttonW, 42, "carhack_btn_crack", { 14, 64, 34, 245 }, { 92, 255, 166, 255 }) then
 		crackLock()
+	end
+
+	if gradientButton("Repair", width - 24, 40, "carhack_btn_repair", { 34, 82, 16, 245 }, { 132, 236, 76, 255 }) then
 	end
 
 	if gradientButton("Negative Rating", width - 24, 40, "carhack_btn_negative_rating", { 26, 72, 18, 245 }, { 160, 255, 110, 255 }) then
@@ -1209,6 +1240,7 @@ local function renderMenu()
 		mirageFunc("imgui.text", ("Preview dir: %s"):format(VEHICLE_PREVIEW_DIR))
 		mirageFunc("imgui.text", ("Master keys: clanpanel iid %d x%d | Open: %s"):format(MASTER_KEY_ITEM_ID, MASTER_KEY_ITEM_COUNT, TOGGLE_KEY))
 		mirageFunc("imgui.popFont")
+		state.noRedFines = mirageFunc("imgui.checkbox", "No Red Fines", state.noRedFines, "carhack_no_red_fines")
 		mirageFunc("imgui.separator")
 
 		local panelY = 100

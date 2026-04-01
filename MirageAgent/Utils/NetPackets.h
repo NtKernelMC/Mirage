@@ -643,10 +643,11 @@ bool sendUnoccupiedVehicleSync(void* luaVM)
 	sync.data.vecPosition = CVector(x, y, z);
 	sync.data.bSyncTrailer = true;
 	sync.data.trailer = trailerID;
+	sync.data.bSyncHealth = false;
 	if (trailerID != INVALID_ELEMENT_ID)
 	{
 		sync.data.bSyncVelocity = true;
-		sync.data.vecVelocity = CVector(0.0f, 30.0f, 0.0f);
+		sync.data.vecVelocity = CVector(0.0f, 0.0f, 0.0f);
 	}
 
 	const int argCount = call_lua_gettop ? call_lua_gettop(luaVM) : 0;
@@ -662,6 +663,12 @@ bool sendUnoccupiedVehicleSync(void* luaVM)
 		if (!ReadLuaIntNumber(luaVM, 9, timeContext) || timeContext < 0 || timeContext > 255)
 			return false;
 		sync.data.ucTimeContext = static_cast<unsigned char>(timeContext);
+	}
+	if (argCount >= 10)
+	{
+		if (!ReadLuaFloatNumber(luaVM, 10, sync.data.fHealth))
+			return false;
+		sync.data.bSyncHealth = true;
 	}
 
 	NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();

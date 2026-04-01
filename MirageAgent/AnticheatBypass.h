@@ -41,7 +41,7 @@ namespace ModernBypass
 			}
 			return true;
 		}
-		/*static bool init_priv_gen = false;
+		static bool init_priv_gen = false;
 		if (!init_priv_gen)
 		{
 			LogInFile(LOG_NAME, xorstr_("[LOG] Initializing Private Serial generator ...\n"));
@@ -53,9 +53,10 @@ namespace ModernBypass
 			}
 			else LogInFile(LOG_NAME, xorstr_("[ERROR] Failed to call InitializePrivateSerialGen.\n"));
 			init_priv_gen = true;
-		}*/
+		}
+		NetBitStreamInterface* BitStream = (NetBitStreamInterface*)bitStream;
 		//auto color_name = magic_enum::enum_name((ePacketID)ucPacketID);
-		//LogInFile(LOG_NAME, xorstr_("PacketID: %d | PacketName: %s\n"), ucPacketID, color_name.data());
+		//LogInFile(LOG_NAME, xorstr_("PacketID: %d | PacketName: %s | Bytes: %d\n"), ucPacketID, color_name.data(), BitStream->GetNumberOfBytesUsed());
 		/*if ((ucPacketID >= 91 && ucPacketID <= 94 && ucPacketID != 93) || ucPacketID == 34 || ucPacketID == 25)
 		{
 			MakeJump((DWORD)callSendPacket, (DWORD)&SendPacket, packet_prologue, sizeof(packet_prologue));
@@ -110,12 +111,20 @@ namespace ModernBypass
 	};
 #pragma pack(pop)
 
-	using ptrRakPeer_QueueBufferedPacket = int(__thiscall*)(void *ECX, void* payload, int bitLength, int priority,
-	int reliability, char orderingChannel, int targetIp, __int16 targetPort, char broadcast, int receiptNumber);
-	static ptrRakPeer_QueueBufferedPacket callRakPeer_QueueBufferedPacket = nullptr;
-	static std::atomic_int g_rakpeer_queue_log_budget{ 8 };
+	using ptrRakPeer_SendBitStreamOrBuffer = char(__thiscall*)(void* ECX, void* bitStream, int priority, int reliability,
+		char orderingChannel, int targetIp, __int16 targetPort, char broadcast);
+	static ptrRakPeer_SendBitStreamOrBuffer callRakPeer_SendBitStreamOrBuffer = nullptr;
+	static std::atomic_int g_rakpeer_send_log_budget{ 8 };
 	static std::mutex g_public_serial_log_mutex;
 	static std::string g_last_logged_public_serial;
+
+	struct RakNet_BitStreamView
+	{
+		uint32_t numberOfBitsUsed;
+		uint32_t numberOfBitsAllocated;
+		uint32_t readOffset;
+		BYTE* data;
+	};
 
 	__forceinline void ApplyD4Cipher(BYTE* data, size_t len)
 	{
@@ -216,22 +225,33 @@ namespace ModernBypass
 		return command_ignore_set.find(cmdName) != command_ignore_set.end();
 	}
 
-	int __fastcall RakPeer_QueueBufferedPacket(void* ECX, void* EDX, void* payload, int bitLength, int priority,
-	int reliability, char orderingChannel, int targetIp, __int16 targetPort, char broadcast, int receiptNumber)
+	char __fastcall RakPeer_SendBitStreamOrBuffer(void* ECX, void* EDX, void* bitStream, int priority, int reliability,
+		char orderingChannel, int targetIp, __int16 targetPort, char broadcast)
 	{
+		if (!bitStream)
+		{
+			LogInFile(LOG_NAME, xorstr_("[WARN] RakPeer_SendBitStreamOrBuffer received null bitStream.\n"));
+			return callRakPeer_SendBitStreamOrBuffer(ECX, bitStream, priority, reliability, orderingChannel, targetIp, targetPort, broadcast);
+		}
+
+		auto* rakBitStream = reinterpret_cast<RakNet_BitStreamView*>(bitStream);
+		BYTE* payload = rakBitStream->data;
+		int bitLength = static_cast<int>(rakBitStream->numberOfBitsUsed);
+
 		if (!payload)
 		{
-			LogInFile(LOG_NAME, xorstr_("[WARN] RakPeer_QueueBufferedPacket received null payload.\n"));
-			return callRakPeer_QueueBufferedPacket(ECX, payload, bitLength, priority, reliability, orderingChannel, targetIp, targetPort, broadcast, receiptNumber);
+			LogInFile(LOG_NAME, xorstr_("[WARN] RakPeer_SendBitStreamOrBuffer received null payload.\n"));
+			return callRakPeer_SendBitStreamOrBuffer(ECX, bitStream, priority, reliability, orderingChannel, targetIp, targetPort, broadcast);
 		}
 
 		unsigned int rawPacketId = *(BYTE*)payload;
 		unsigned int packetId = rawPacketId;
 		const unsigned int PACKET_RAK_ADDED_TO_ID = 99;
 
-		if (!packetId || packetId < PACKET_RAK_ADDED_TO_ID) return 1;
+		if (!packetId || packetId < PACKET_RAK_ADDED_TO_ID)
+			return callRakPeer_SendBitStreamOrBuffer(ECX, bitStream, priority, reliability, orderingChannel, targetIp, targetPort, broadcast);
 		packetId -= PACKET_RAK_ADDED_TO_ID;
-		//LogInFile(LOG_NAME, xorstr_("[LOG] RakPeer_QueueBufferedPacket PacketID: %d\n"), packetId);
+		//LogInFile(LOG_NAME, xorstr_("[LOG] RakPeer_SendBitStreamOrBuffer PacketID: %d\n"), packetId);
 
 		if (packetId == PACKET_ID_COMMAND)
 		{
@@ -244,7 +264,6 @@ namespace ModernBypass
 		}
 		
 		const bool isPublicSerialPacket =
-			packetId == PACKET_ID_SERVER_JOIN_DATA ||
 			packetId == PACKET_ID_PLAYER_JOINDATA ||
 			packetId == PACKET_ID_MTA_RESERVED_13_JOINDATA;
 
@@ -260,7 +279,7 @@ namespace ModernBypass
 			const size_t totalBytes = (bitLength + 7) >> 3;
 			if (totalBytes < 3 + 32 + 2)
 			{
-				LogInFile(LOG_NAME, xorstr_("[ERROR] QueueBufferedPacket - Invalid packet size.\n"));
+				LogInFile(LOG_NAME, xorstr_("[ERROR] SendBitStreamOrBuffer - Invalid packet size.\n"));
 				return 0;
 			}
 
@@ -273,7 +292,7 @@ namespace ModernBypass
 				BYTE public_enc[32] = {};
 				if (!EncodePublicSerialV15(public_serial, public_enc))
 				{
-					LogInFile(LOG_NAME, xorstr_("[ERROR] QueueBufferedPacket - Invalid public serial (v15 mode).\n"));
+					LogInFile(LOG_NAME, xorstr_("[ERROR] SendBitStreamOrBuffer - Invalid public serial (v15 mode).\n"));
 					return 0;
 				}
 				memcpy(packet + public_off, public_enc, 32);
@@ -300,7 +319,7 @@ namespace ModernBypass
 		}
 
 		if ((packetId >= 91 && packetId <= 94) || (packetId == 34 || packetId == 25)) return 1;
-		return callRakPeer_QueueBufferedPacket(ECX, payload, bitLength, priority, reliability, orderingChannel, targetIp, targetPort, broadcast, receiptNumber);
+		return callRakPeer_SendBitStreamOrBuffer(ECX, bitStream, priority, reliability, orderingChannel, targetIp, targetPort, broadcast);
 	}
 	using ptr_moris_hook_scanner = uint8_t * (__stdcall*)(uint8_t* a1);
 	static ptr_moris_hook_scanner call_moris_hook_scanner = nullptr;
@@ -437,7 +456,7 @@ namespace ModernBypass
 			MessageBeep(MB_ICONASTERISK);
 			did_beep = true;
 		}
-		ProcessPacket_o = (ProcessPacket_t)scan.FindPatternIDA(xorstr_("client.dll"),
+		/*ProcessPacket_o = (ProcessPacket_t)scan.FindPatternIDA(xorstr_("client.dll"),
 			xorstr_("55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B F9 80 7F"));
 		if (ProcessPacket_o != nullptr)
 		{
@@ -446,10 +465,10 @@ namespace ModernBypass
 			else
 				LogInFile(LOG_NAME, xorstr_("[ERROR] Found address for ProcessPacket, but hook activation failed.\n"));
 		}
-		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for ProcessPacket.\n"));
-		//ShadowTrace::InitWmiCacheOnce();
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for ProcessPacket.\n"));*/
+		ShadowTrace::InitWmiCacheOnce();
 		
-		/*callInitializePrivateSerialGen = (ptrInitializePrivateSerialGen)scan.FindCallPattern(xorstr_("netc.dll"),
+	    callInitializePrivateSerialGen = (ptrInitializePrivateSerialGen)scan.FindCallPattern(xorstr_("netc.dll"),
 			xorstr_("E8 ? ? ? ? 33 C0 66 A3"));
 		if (callInitializePrivateSerialGen != nullptr)
 		{
@@ -475,7 +494,7 @@ namespace ModernBypass
 			MH_EnableHook(MH_ALL_HOOKS);
 			LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to EncryptWmiBuffer!\n"));
 		}
-		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for EncryptWmiBuffer.\n"));*/
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for EncryptWmiBuffer.\n"));
 		/*call_moris_hook_scanner = (ptr_moris_hook_scanner)scan.FindPatternIDA(xorstr_("core.dll"),
 			xorstr_("55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? A1 ? ? ? ? 33 C5 89 45 ? 56 50 8D 45 ? 64 A3 ? ? ? ? 8B 75 ? 89 4D"));
 		if (call_moris_hook_scanner)
@@ -487,20 +506,20 @@ namespace ModernBypass
 		}
 		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for AC_SCAN.\n"));*/
 		
-		callRakPeer_QueueBufferedPacket = (ptrRakPeer_QueueBufferedPacket)scan.FindPatternIDA(xorstr_("netc.dll"),
-		xorstr_("55 8B EC 53 56 8B F1 57 8D 8E"));
-		if (callRakPeer_QueueBufferedPacket != nullptr)
+		callRakPeer_SendBitStreamOrBuffer = (ptrRakPeer_SendBitStreamOrBuffer)scan.FindPatternIDA(xorstr_("netc.dll"),
+			xorstr_("55 8B EC 56 57 8B 7D ? 8B F1 ? ? 83 C0"));
+		if (callRakPeer_SendBitStreamOrBuffer != nullptr)
 		{
-			void* hookTarget = callRakPeer_QueueBufferedPacket;
-			if (EnsureMinHook(hookTarget, &RakPeer_QueueBufferedPacket, reinterpret_cast<void**>(&callRakPeer_QueueBufferedPacket), "RakPeer_QueueBufferedPacket"))
+			void* hookTarget = callRakPeer_SendBitStreamOrBuffer;
+			if (EnsureMinHook(hookTarget, &RakPeer_SendBitStreamOrBuffer, reinterpret_cast<void**>(&callRakPeer_SendBitStreamOrBuffer), "RakPeer_SendBitStreamOrBuffer"))
 			{
-				g_rakpeer_queue_log_budget = 8;
-				LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to RakPeer_QueueBufferedPacket! target=%p original=%p\n"), hookTarget, callRakPeer_QueueBufferedPacket);
+				g_rakpeer_send_log_budget = 8;
+				LogInFile(LOG_NAME, xorstr_("[LOG] Found address from signature to RakPeer_SendBitStreamOrBuffer!\n"));
 			}
 			else
-				LogInFile(LOG_NAME, xorstr_("[ERROR] Found address for RakPeer_QueueBufferedPacket, but hook activation failed.\n"));
+				LogInFile(LOG_NAME, xorstr_("[ERROR] Found address for RakPeer_SendBitStreamOrBuffer, but hook activation failed.\n"));
 		}
-		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for RakPeer_QueueBufferedPacket.\n"));
+		else LogInFile(LOG_NAME, xorstr_("[ERROR] Can`t find a signature for RakPeer_SendBitStreamOrBuffer.\n"));
 		
 		callSendPacket = (ptrSendPacket)scan.FindPattern(xorstr_("netc.dll"),
 			xorstr_("\x55\x8B\xEC\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x81\xEC\x00\x00\x00\x00\xA1\x00\x00\x00\x00\x33\xC5\x89\x45\xF0\x56\x57\x50\x8D\x45\xF4\x64\xA3\x00\x00\x00\x00\x8B\xF1\x89\xB5\x00\x00\x00\x00\x8B\x7D\x0C"),

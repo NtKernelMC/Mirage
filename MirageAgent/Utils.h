@@ -11,8 +11,8 @@
 #define LOG_NAME xorstr_("Mirage.log") // Имя лог файла
 #define WITH_LOGGING // Закоментить чтобы отключить вывод в лог файл
 #undef MIRAGE_VERSION
-#define MIRAGE_VERSION xorstr_("V7.0")
-#define MIRAGE_VERSION_INFO xorstr_("7.0.0.0")
+#define MIRAGE_VERSION xorstr_("V7.1")
+#define MIRAGE_VERSION_INFO xorstr_("7.1.0.0")
 #define TO_ELEMENTID(x) ((ElementID) reinterpret_cast < unsigned long > (x) )
 #include <Windows.h>
 #include <stdio.h>

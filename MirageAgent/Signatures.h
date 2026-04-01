@@ -171,7 +171,6 @@ void SignatureScanner()
 	if (mirage.fork_version == ForkVersion::FORK_VERSION_1_5) LegacyBypass::EvadeAnticheat();
     if (mirage.fork_version == ForkVersion::FORK_VERSION_1_6)
     {
-        ModernBypass::EvadeAnticheat();
         DWORD oldProtect = 0x0;
         DWORD patch_addr = (DWORD)scan.FindPatternIDA(xorstr_("client.dll"), xorstr_("E8 ? ? ? ? 83 C4 ? 46 3B F7 0F 8C"));
         if (patch_addr != NULL)
