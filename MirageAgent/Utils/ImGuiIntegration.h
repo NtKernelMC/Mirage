@@ -22,6 +22,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 
 using PresentSignature = HRESULT(__stdcall*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*);
 using ResetSignature = HRESULT(__stdcall*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
+using EndSceneSignature = HRESULT(__stdcall*)(IDirect3DDevice9*);
 using Direct3DCreate9Signature = IDirect3D9* (WINAPI*)(UINT);
 using Direct3DCreate9ExSignature = HRESULT(WINAPI*)(UINT, IDirect3D9Ex**);
 using CreateDeviceSignature = HRESULT(STDMETHODCALLTYPE*)(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*, IDirect3DDevice9**);
@@ -183,6 +184,7 @@ static std::atomic_bool g_imgui_force_cursor = false;
 static std::atomic_bool g_imgui_draw_cursor = false;
 static std::atomic_int g_imgui_menu_request_count = 0;
 static std::atomic_int g_imgui_theme_request = -1; // 0 dark, 1 light, 2 classic
+static std::atomic<DWORD> g_imgui_last_menu_toggle_tick = 0;
 static std::string g_imgui_ini_path;
 
 static std::mutex g_imgui_mutex;
@@ -207,13 +209,16 @@ struct ImGuiCodeEditorState
 static std::unordered_map<std::string, ImGuiCodeEditorState> g_imgui_code_editors;
 
 static HWND g_imgui_hwnd = nullptr;
+static HWND g_imgui_hwnd_hint = nullptr;
 static WNDPROC g_imgui_old_wndproc = nullptr;
 static IDirect3DDevice9* g_imgui_device = nullptr;
 
 static SimpleVTableHook g_present_vtbl_hook;
 static SimpleVTableHook g_reset_vtbl_hook;
+static SimpleVTableHook g_end_scene_vtbl_hook;
 static PresentSignature g_present_original = nullptr;
 static ResetSignature g_reset_original = nullptr;
+static EndSceneSignature g_end_scene_original = nullptr;
 
 static bool g_cursor_visible_by_imgui = false;
 static std::atomic_bool g_imgui_hook_thread_running = false;
@@ -227,18 +232,33 @@ static HMODULE g_imgui_d3d9_module = nullptr;
 static void* g_imgui_direct3d_create9_target = nullptr;
 static void* g_imgui_direct3d_create9ex_target = nullptr;
 static void* g_imgui_create_device_target = nullptr;
+static void* g_imgui_create_device_from_ex_target = nullptr;
 static void* g_imgui_create_device_ex_target = nullptr;
+static void* g_imgui_present_target = nullptr;
+static void* g_imgui_reset_target = nullptr;
+static void* g_imgui_end_scene_target = nullptr;
 static Direct3DCreate9Signature g_imgui_direct3d_create9_original = nullptr;
 static Direct3DCreate9ExSignature g_imgui_direct3d_create9ex_original = nullptr;
 static CreateDeviceSignature g_imgui_create_device_original = nullptr;
+static CreateDeviceSignature g_imgui_create_device_from_ex_original = nullptr;
 static CreateDeviceExSignature g_imgui_create_device_ex_original = nullptr;
 static void** g_imgui_present_slot = nullptr;
 static void** g_imgui_reset_slot = nullptr;
+static void** g_imgui_end_scene_slot = nullptr;
+static std::atomic_bool g_imgui_method_hooks_installed = false;
+static thread_local bool g_imgui_probe_device_creation = false;
+static std::atomic_bool g_imgui_method_probe_broken = false;
+static std::atomic<DWORD> g_imgui_next_method_probe_tick = 0;
+static std::atomic_uint g_imgui_method_probe_fail_count = 0;
+static bool g_imgui_mouse_down[5]{};
 
 static bool InstallDx9Hooks();
 static bool ImGuiInstallD3DFactoryHooks();
 static bool ImGuiInstallCreateDeviceHooks(IDirect3D9* direct3d);
+static bool ImGuiInstallCreateDeviceHookFromEx(IDirect3D9Ex* direct3d_ex);
 static bool ImGuiInstallCreateDeviceExHook(IDirect3D9Ex* direct3d_ex);
+static bool ImGuiInstallDx9MethodHooks();
+static bool ImGuiTryCaptureKnownDx9Device();
 static void ImGuiRememberDx9Device(IDirect3DDevice9* device);
 static void ImGuiNotifyClientDllReload();
 static void ImGuiHandleClientDllReload();
@@ -249,6 +269,9 @@ static HRESULT STDMETHODCALLTYPE ImGuiCreateDeviceHook(IDirect3D9* direct3d, UIN
 static HRESULT STDMETHODCALLTYPE ImGuiCreateDeviceExHook(IDirect3D9Ex* direct3d, UINT adapter, D3DDEVTYPE device_type, HWND focus_window,
     DWORD behavior_flags, D3DPRESENT_PARAMETERS* presentation_parameters, D3DDISPLAYMODEEX* fullscreen_display_mode,
     IDirect3DDevice9Ex** returned_device);
+static HRESULT __stdcall ImGuiResetHook(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params);
+static HRESULT __stdcall ImGuiPresentHook(IDirect3DDevice9* device, const RECT* src_rect, const RECT* dst_rect, HWND dst_wnd, const RGNDATA* dirty_region);
+static HRESULT __stdcall ImGuiEndSceneHook(IDirect3DDevice9* device);
 
 static void ImGuiResetLuaInteractionState(bool clear_queue)
 {
@@ -256,6 +279,8 @@ static void ImGuiResetLuaInteractionState(bool clear_queue)
     g_imgui_block_mta_binds = false;
     g_imgui_force_cursor = false;
     g_imgui_draw_cursor = false;
+    for (bool& down : g_imgui_mouse_down)
+        down = false;
 
     if (!clear_queue)
         return;
@@ -408,6 +433,12 @@ static bool ImGuiHandleRenderToggleHotkey(HWND hwnd, UINT msg, WPARAM wparam, LP
 
     if (ImGuiIsInitialKeyDown(msg, lparam))
     {
+        DWORD now = GetTickCount();
+        DWORD last = g_imgui_last_menu_toggle_tick.load();
+        if (last != 0 && now - last < 250)
+            return true;
+        g_imgui_last_menu_toggle_tick = now;
+
         const bool allowed = !g_imgui_lua_render_allowed.load();
         ImGuiSetLuaRenderAllowed(allowed);
         LogInFile(LOG_NAME, xorstr_("[LOG] ImGui Lua render %s by VK_%u (0x%02X).\n"), allowed ? "enabled" : "disabled", ImGuiGetMenuToggleVk(), ImGuiGetMenuToggleVk());
@@ -422,7 +453,6 @@ static LRESULT CALLBACK ImGuiWndProcHook(HWND hwnd, UINT msg, WPARAM wparam, LPA
         return 1;
 
     bool should_handle = g_imgui_initialized &&
-        ImGuiIsLuaRenderAllowed() &&
         (g_imgui_capture_input || g_imgui_force_cursor || g_imgui_block_mta_binds);
 
     if (should_handle && ImGui::GetCurrentContext())
@@ -447,6 +477,81 @@ static LRESULT CALLBACK ImGuiWndProcHook(HWND hwnd, UINT msg, WPARAM wparam, LPA
     return DefWindowProc(hwnd, msg, wparam, lparam);
 }
 
+static BOOL CALLBACK ImGuiFindProcessWindowProc(HWND hwnd, LPARAM lparam)
+{
+    if (!IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER))
+        return TRUE;
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != GetCurrentProcessId())
+        return TRUE;
+
+    RECT rc{};
+    if (!GetWindowRect(hwnd, &rc))
+        return TRUE;
+
+    LONG area = (rc.right - rc.left) * (rc.bottom - rc.top);
+    if (area <= 0)
+        return TRUE;
+
+    HWND* best = reinterpret_cast<HWND*>(lparam);
+    if (!*best)
+    {
+        *best = hwnd;
+        return TRUE;
+    }
+
+    RECT best_rc{};
+    GetWindowRect(*best, &best_rc);
+    LONG best_area = (best_rc.right - best_rc.left) * (best_rc.bottom - best_rc.top);
+    if (area > best_area)
+        *best = hwnd;
+
+    return TRUE;
+}
+
+static HWND ImGuiFindProcessWindow()
+{
+    HWND foreground = GetForegroundWindow();
+    DWORD pid = 0;
+    GetWindowThreadProcessId(foreground, &pid);
+    if (pid == GetCurrentProcessId() && IsWindowVisible(foreground))
+        return foreground;
+
+    HWND hwnd = nullptr;
+    EnumWindows(ImGuiFindProcessWindowProc, reinterpret_cast<LPARAM>(&hwnd));
+    return hwnd;
+}
+
+static void ImGuiPollMouseInput()
+{
+    if (!g_imgui_hwnd || !ImGui::GetCurrentContext())
+        return;
+    if (!g_imgui_capture_input && !g_imgui_force_cursor && !g_imgui_block_mta_binds)
+        return;
+
+    POINT pos{};
+    if (!GetCursorPos(&pos) || !ScreenToClient(g_imgui_hwnd, &pos))
+        return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
+    io.AddMousePosEvent(static_cast<float>(pos.x), static_cast<float>(pos.y));
+
+    const int buttons[5] = { VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2 };
+    for (int i = 0; i < 5; ++i)
+    {
+        bool down = (GetAsyncKeyState(buttons[i]) & 0x8000) != 0;
+        if (down == g_imgui_mouse_down[i])
+            continue;
+
+        g_imgui_mouse_down[i] = down;
+        io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
+        io.AddMouseButtonEvent(i, down);
+    }
+}
+
 static void ImGuiUpdateSystemCursor()
 {
     const bool should_show = ImGuiIsLuaRenderAllowed() && (g_imgui_force_cursor || g_imgui_capture_input);
@@ -464,6 +569,19 @@ static void ImGuiUpdateSystemCursor()
     }
 
     g_cursor_visible_by_imgui = should_show;
+}
+
+static void ImGuiRestoreWndProcHook()
+{
+    if (g_imgui_hwnd && g_imgui_old_wndproc && IsWindow(g_imgui_hwnd))
+    {
+        WNDPROC current_wndproc = reinterpret_cast<WNDPROC>(GetWindowLongPtr(g_imgui_hwnd, GWLP_WNDPROC));
+        if (current_wndproc == &ImGuiWndProcHook)
+            SetWindowLongPtr(g_imgui_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_imgui_old_wndproc));
+    }
+
+    g_imgui_old_wndproc = nullptr;
+    g_imgui_hwnd = nullptr;
 }
 
 static const char* ImGuiResolveIniPath()
@@ -579,12 +697,48 @@ static void ImGuiRemoveMinHook(void*& target)
     target = nullptr;
 }
 
-static void ImGuiRememberDx9Device(IDirect3DDevice9* device)
+static bool ImGuiReadDx9DeviceTable(IDirect3DDevice9* device, void*** table)
+{
+    if (!device || !table)
+        return false;
+
+    __try
+    {
+        *table = *reinterpret_cast<void***>(device);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        *table = nullptr;
+        return false;
+    }
+
+    return *table != nullptr;
+}
+
+static bool ImGuiReadKnownDx9Device(uintptr_t address, IDirect3DDevice9** device)
 {
     if (!device)
+        return false;
+
+    __try
+    {
+        *device = *reinterpret_cast<IDirect3DDevice9**>(address);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        *device = nullptr;
+        return false;
+    }
+
+    return *device != nullptr;
+}
+
+static void ImGuiRememberDx9Device(IDirect3DDevice9* device)
+{
+    void** table = nullptr;
+    if (!ImGuiReadDx9DeviceTable(device, &table))
         return;
 
-    void** table = *reinterpret_cast<void***>(device);
     if (!table)
         return;
 
@@ -592,9 +746,55 @@ static void ImGuiRememberDx9Device(IDirect3DDevice9* device)
     g_imgui_device = device;
     g_imgui_present_slot = &table[17];
     g_imgui_reset_slot = &table[16];
+    g_imgui_end_scene_slot = &table[42];
 
     if (changed)
         LogInFile(LOG_NAME, xorstr_("[LOG] DX9 device captured: %p\n"), device);
+}
+
+static bool ImGuiIsLikelyDx9Device(IDirect3DDevice9* device)
+{
+    void** table = nullptr;
+    if (!ImGuiReadDx9DeviceTable(device, &table))
+        return false;
+
+    return table[16] && table[17] && table[42];
+}
+
+static bool ImGuiTryRememberKnownDx9Device(uintptr_t address, const char* name)
+{
+    IDirect3DDevice9* device = nullptr;
+    if (!ImGuiReadKnownDx9Device(address, &device))
+        return false;
+
+    if (!ImGuiIsLikelyDx9Device(device))
+        return false;
+
+    const bool changed = g_imgui_device != device;
+    ImGuiRememberDx9Device(device);
+    if (changed)
+        LogInFile(LOG_NAME, xorstr_("[LOG] DX9 device found via %s: %p\n"), name, device);
+    return true;
+}
+
+static bool ImGuiTryCaptureKnownDx9Device()
+{
+    if (ImGuiIsLikelyDx9Device(g_imgui_device))
+        return true;
+
+    if (ImGuiTryRememberKnownDx9Device(0x00C97C28u, xorstr_("RwD3D9 global")))
+        return true;
+
+    return false;
+}
+
+static void ImGuiRememberHwnd(HWND focus_window, D3DPRESENT_PARAMETERS* presentation_parameters)
+{
+    HWND hwnd = focus_window;
+    if (!hwnd && presentation_parameters)
+        hwnd = presentation_parameters->hDeviceWindow;
+    if (hwnd)
+        g_imgui_hwnd_hint = hwnd;
 }
 
 static bool ImGuiInstallCreateDeviceHooks(IDirect3D9* direct3d)
@@ -633,6 +833,45 @@ static bool ImGuiInstallCreateDeviceHooks(IDirect3D9* direct3d)
 
     g_imgui_create_device_target = create_device_target;
     LogInFile(LOG_NAME, xorstr_("[LOG] DX9 CreateDevice hook installed.\n"));
+    return true;
+}
+
+static bool ImGuiInstallCreateDeviceHookFromEx(IDirect3D9Ex* direct3d_ex)
+{
+    if (!direct3d_ex)
+        return true;
+
+    void** table = *reinterpret_cast<void***>(direct3d_ex);
+    if (!table)
+    {
+        ImGuiLogDx9HookFailure("IDirect3D9Ex base vtable is null while installing CreateDevice hook");
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_imgui_hook_state_mutex);
+
+    void* create_device_target = table[16];
+    if (!create_device_target)
+    {
+        ImGuiLogDx9HookFailure("IDirect3D9Ex base CreateDevice slot is null");
+        return false;
+    }
+
+    if (g_imgui_create_device_from_ex_target == create_device_target && g_imgui_create_device_from_ex_original)
+        return true;
+
+    if (g_imgui_create_device_from_ex_target && g_imgui_create_device_from_ex_target != create_device_target)
+    {
+        ImGuiRemoveMinHook(g_imgui_create_device_from_ex_target);
+        g_imgui_create_device_from_ex_original = nullptr;
+    }
+
+    if (!ImGuiEnsureMinHook(create_device_target, reinterpret_cast<void*>(&ImGuiCreateDeviceHook),
+        reinterpret_cast<void**>(&g_imgui_create_device_from_ex_original), "IDirect3D9Ex::CreateDevice"))
+        return false;
+
+    g_imgui_create_device_from_ex_target = create_device_target;
+    LogInFile(LOG_NAME, xorstr_("[LOG] DX9Ex base CreateDevice hook installed.\n"));
     return true;
 }
 
@@ -688,7 +927,7 @@ static HRESULT WINAPI ImGuiDirect3DCreate9ExHook(UINT sdk_version, IDirect3D9Ex*
     HRESULT result = g_imgui_direct3d_create9ex_original ? g_imgui_direct3d_create9ex_original(sdk_version, direct3d_ex) : D3DERR_INVALIDCALL;
     if (SUCCEEDED(result) && direct3d_ex && *direct3d_ex)
     {
-        ImGuiInstallCreateDeviceHooks(*direct3d_ex);
+        ImGuiInstallCreateDeviceHookFromEx(*direct3d_ex);
         ImGuiInstallCreateDeviceExHook(*direct3d_ex);
     }
     return result;
@@ -697,11 +936,22 @@ static HRESULT WINAPI ImGuiDirect3DCreate9ExHook(UINT sdk_version, IDirect3D9Ex*
 static HRESULT STDMETHODCALLTYPE ImGuiCreateDeviceHook(IDirect3D9* direct3d, UINT adapter, D3DDEVTYPE device_type, HWND focus_window,
     DWORD behavior_flags, D3DPRESENT_PARAMETERS* presentation_parameters, IDirect3DDevice9** returned_device)
 {
-    HRESULT result = g_imgui_create_device_original ?
-        g_imgui_create_device_original(direct3d, adapter, device_type, focus_window, behavior_flags, presentation_parameters, returned_device) :
+    if (!g_imgui_probe_device_creation)
+        ImGuiRememberHwnd(focus_window, presentation_parameters);
+
+    CreateDeviceSignature original = g_imgui_create_device_original;
+    if (direct3d)
+    {
+        void** table = *reinterpret_cast<void***>(direct3d);
+        if (table && table[16] == g_imgui_create_device_from_ex_target && g_imgui_create_device_from_ex_original)
+            original = g_imgui_create_device_from_ex_original;
+    }
+
+    HRESULT result = original ?
+        original(direct3d, adapter, device_type, focus_window, behavior_flags, presentation_parameters, returned_device) :
         D3DERR_INVALIDCALL;
 
-    if (SUCCEEDED(result) && returned_device && *returned_device)
+    if (SUCCEEDED(result) && returned_device && *returned_device && !g_imgui_probe_device_creation)
     {
         ImGuiRememberDx9Device(*returned_device);
         InstallDx9Hooks();
@@ -714,11 +964,14 @@ static HRESULT STDMETHODCALLTYPE ImGuiCreateDeviceExHook(IDirect3D9Ex* direct3d,
     DWORD behavior_flags, D3DPRESENT_PARAMETERS* presentation_parameters, D3DDISPLAYMODEEX* fullscreen_display_mode,
     IDirect3DDevice9Ex** returned_device)
 {
+    if (!g_imgui_probe_device_creation)
+        ImGuiRememberHwnd(focus_window, presentation_parameters);
+
     HRESULT result = g_imgui_create_device_ex_original ?
         g_imgui_create_device_ex_original(direct3d, adapter, device_type, focus_window, behavior_flags, presentation_parameters, fullscreen_display_mode, returned_device) :
         D3DERR_INVALIDCALL;
 
-    if (SUCCEEDED(result) && returned_device && *returned_device)
+    if (SUCCEEDED(result) && returned_device && *returned_device && !g_imgui_probe_device_creation)
     {
         ImGuiRememberDx9Device(*returned_device);
         InstallDx9Hooks();
@@ -780,13 +1033,187 @@ static bool ImGuiInstallD3DFactoryHooks()
         IDirect3D9Ex* direct3d_ex = nullptr;
         if (SUCCEEDED(g_imgui_direct3d_create9ex_original(D3D_SDK_VERSION, &direct3d_ex)) && direct3d_ex)
         {
-            ImGuiInstallCreateDeviceHooks(direct3d_ex);
+            ImGuiInstallCreateDeviceHookFromEx(direct3d_ex);
             ImGuiInstallCreateDeviceExHook(direct3d_ex);
             direct3d_ex->Release();
         }
     }
 
     LogInFile(LOG_NAME, xorstr_("[LOG] DX9 factory hooks installed (Direct3DCreate9/Ex).\n"));
+    return true;
+}
+
+static HWND ImGuiCreateProbeWindow()
+{
+    HINSTANCE instance = GetModuleHandleA(nullptr);
+    const char* class_name = xorstr_("MirageD3D9ProbeWindow");
+
+    WNDCLASSEXA wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = DefWindowProcA;
+    wc.hInstance = instance;
+    wc.lpszClassName = class_name;
+    RegisterClassExA(&wc);
+
+    return CreateWindowExA(0, class_name, class_name, WS_OVERLAPPEDWINDOW, 0, 0, 100, 100, nullptr, nullptr, instance, nullptr);
+}
+
+static void ImGuiMarkMethodProbeFailed()
+{
+    unsigned int fails = g_imgui_method_probe_fail_count.fetch_add(1) + 1;
+    DWORD delay = fails < 3 ? 5000 : 30000;
+    g_imgui_next_method_probe_tick = GetTickCount() + delay;
+}
+
+static HRESULT ImGuiCreateProbeDevice(IDirect3D9* direct3d, HWND hwnd, IDirect3DDevice9** device)
+{
+    if (!direct3d || !hwnd || !device)
+        return D3DERR_INVALIDCALL;
+
+    *device = nullptr;
+
+    D3DPRESENT_PARAMETERS params{};
+    params.Windowed = TRUE;
+    params.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    params.BackBufferFormat = D3DFMT_UNKNOWN;
+    params.hDeviceWindow = hwnd;
+    params.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+
+    const DWORD flags[] = {
+        D3DCREATE_SOFTWARE_VERTEXPROCESSING,
+        D3DCREATE_HARDWARE_VERTEXPROCESSING,
+        D3DCREATE_MIXED_VERTEXPROCESSING
+    };
+
+    g_imgui_probe_device_creation = true;
+    HRESULT result = D3DERR_INVALIDCALL;
+    for (DWORD flag : flags)
+    {
+        *device = nullptr;
+        result = direct3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd, flag, &params, device);
+        if (SUCCEEDED(result) && *device)
+            break;
+    }
+    g_imgui_probe_device_creation = false;
+
+    return result;
+}
+
+static bool ImGuiInstallDx9MethodHooks()
+{
+    if (g_imgui_method_hooks_installed && g_present_original && g_reset_original)
+        return true;
+
+    if (g_imgui_method_probe_broken)
+        return false;
+
+    DWORD now = GetTickCount();
+    DWORD next_probe = g_imgui_next_method_probe_tick.load();
+    if (next_probe && static_cast<LONG>(now - next_probe) < 0)
+        return false;
+
+    g_imgui_next_method_probe_tick = now + 5000;
+
+    if (!g_imgui_direct3d_create9_original)
+        return false;
+
+    IDirect3D9* direct3d = g_imgui_direct3d_create9_original(D3D_SDK_VERSION);
+    if (!direct3d)
+    {
+        ImGuiMarkMethodProbeFailed();
+        ImGuiLogDx9HookFailure("Direct3DCreate9 probe returned null");
+        return false;
+    }
+
+    bool destroy_hwnd = false;
+    HWND hwnd = g_imgui_hwnd_hint && IsWindow(g_imgui_hwnd_hint) ? g_imgui_hwnd_hint : ImGuiFindProcessWindow();
+    if (!hwnd)
+    {
+        hwnd = ImGuiCreateProbeWindow();
+        destroy_hwnd = hwnd != nullptr;
+    }
+
+    if (!hwnd)
+    {
+        direct3d->Release();
+        ImGuiMarkMethodProbeFailed();
+        ImGuiLogDx9HookFailure("probe window creation failed (gle=%lu)", GetLastError());
+        return false;
+    }
+
+    IDirect3DDevice9* device = nullptr;
+    HRESULT result = ImGuiCreateProbeDevice(direct3d, hwnd, &device);
+    direct3d->Release();
+
+    if (FAILED(result) || !device)
+    {
+        if (destroy_hwnd)
+            DestroyWindow(hwnd);
+        ImGuiMarkMethodProbeFailed();
+        if (SUCCEEDED(result) && !device)
+            g_imgui_method_probe_broken = true;
+        ImGuiLogDx9HookFailure("probe device creation failed (hr=0x%08X)", result);
+        return false;
+    }
+
+    void** table = *reinterpret_cast<void***>(device);
+    void* present_target = table ? table[17] : nullptr;
+    void* reset_target = table ? table[16] : nullptr;
+    void* end_scene_target = table ? table[42] : nullptr;
+    device->Release();
+    if (destroy_hwnd)
+        DestroyWindow(hwnd);
+
+    if (!present_target || !reset_target)
+    {
+        ImGuiMarkMethodProbeFailed();
+        ImGuiLogDx9HookFailure("probe device vtable is missing Present/Reset targets");
+        return false;
+    }
+
+    if (g_imgui_present_target && g_imgui_present_target != present_target)
+    {
+        ImGuiRemoveMinHook(g_imgui_present_target);
+        g_present_original = nullptr;
+    }
+    if (g_imgui_reset_target && g_imgui_reset_target != reset_target)
+    {
+        ImGuiRemoveMinHook(g_imgui_reset_target);
+        g_reset_original = nullptr;
+    }
+    if (g_imgui_end_scene_target && g_imgui_end_scene_target != end_scene_target)
+    {
+        ImGuiRemoveMinHook(g_imgui_end_scene_target);
+        g_end_scene_original = nullptr;
+    }
+
+    if (!ImGuiEnsureMinHook(present_target, reinterpret_cast<void*>(&ImGuiPresentHook),
+        reinterpret_cast<void**>(&g_present_original), "IDirect3DDevice9::Present"))
+        return false;
+    g_imgui_present_target = present_target;
+
+    if (!ImGuiEnsureMinHook(reset_target, reinterpret_cast<void*>(&ImGuiResetHook),
+        reinterpret_cast<void**>(&g_reset_original), "IDirect3DDevice9::Reset"))
+    {
+        ImGuiRemoveMinHook(g_imgui_present_target);
+        g_present_original = nullptr;
+        return false;
+    }
+    g_imgui_reset_target = reset_target;
+
+    if (end_scene_target && !g_end_scene_original)
+    {
+        if (!ImGuiEnsureMinHook(end_scene_target, reinterpret_cast<void*>(&ImGuiEndSceneHook),
+            reinterpret_cast<void**>(&g_end_scene_original), "IDirect3DDevice9::EndScene"))
+            LogInFile(LOG_NAME, xorstr_("[WARN] DX9 EndScene method hook unavailable, Present fallback remains active.\n"));
+    }
+
+    g_imgui_end_scene_target = end_scene_target;
+    g_imgui_method_hooks_installed = true;
+    g_imgui_method_probe_broken = false;
+    g_imgui_next_method_probe_tick = 0;
+    g_imgui_method_probe_fail_count = 0;
+    LogInFile(LOG_NAME, xorstr_("[LOG] DX9 method hooks installed (Present/Reset/EndScene probe).\n"));
     return true;
 }
 
@@ -803,6 +1230,8 @@ static void** get_function_slot(int vtable_index)
                     g_imgui_present_slot = &table[17];
                 else if (vtable_index == 16)
                     g_imgui_reset_slot = &table[16];
+                else if (vtable_index == 42)
+                    g_imgui_end_scene_slot = &table[42];
                 return &table[vtable_index];
             }
         }
@@ -815,6 +1244,8 @@ static void** get_function_slot(int vtable_index)
         return g_imgui_present_slot;
     if (vtable_index == 16)
         return g_imgui_reset_slot;
+    if (vtable_index == 42)
+        return g_imgui_end_scene_slot;
     return nullptr;
 }
 
@@ -1818,13 +2249,12 @@ static void ImGuiEnsureWndProcHook(IDirect3DDevice9* device)
         return;
 
     if (g_imgui_hwnd && g_imgui_old_wndproc)
-    {
-        SetWindowLongPtr(g_imgui_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_imgui_old_wndproc));
-    }
+        ImGuiRestoreWndProcHook();
 
     g_imgui_hwnd = hwnd;
     g_imgui_old_wndproc = reinterpret_cast<WNDPROC>(
         SetWindowLongPtr(g_imgui_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&ImGuiWndProcHook)));
+    LogInFile(LOG_NAME, xorstr_("[LOG] ImGui WndProc hook set: hwnd=%p old=%p.\n"), g_imgui_hwnd, g_imgui_old_wndproc);
 }
 
 static bool ImGuiInitialize(IDirect3DDevice9* device)
@@ -1880,6 +2310,47 @@ static bool ImGuiInitialize(IDirect3DDevice9* device)
     return true;
 }
 
+static void ImGuiRenderFrame(IDirect3DDevice9* device)
+{
+    ImGuiRememberDx9Device(device);
+
+    if (g_imgui_reload_requested.exchange(false))
+    {
+        ImGuiResetRenderContextState();
+        g_imgui_device = device;
+        LogInFile(LOG_NAME, xorstr_("[LOG] ImGui render context reset after client.dll reload.\n"));
+    }
+
+    if (!g_imgui_initialized)
+        ImGuiInitialize(device);
+
+    if (!g_imgui_initialized)
+        return;
+
+    ImGuiEnsureWndProcHook(device);
+    ImGuiUpdateSystemCursor();
+
+    int theme_request = g_imgui_theme_request.exchange(-1);
+    if (theme_request == 0) ImGui::StyleColorsDark();
+    else if (theme_request == 1) ImGui::StyleColorsLight();
+    else if (theme_request == 2) ImGui::StyleColorsClassic();
+
+    ImGui_ImplDX9_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGuiPollMouseInput();
+    ImGui::NewFrame();
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.MouseDrawCursor = false;
+
+    ImGuiProcessPendingResources();
+    ImGuiExecuteLuaQueue();
+    ImGuiDrawCustomCursor();
+
+    ImGui::Render();
+    ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+}
+
 static HRESULT __stdcall ImGuiResetHook(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params)
 {
     ImGuiRememberDx9Device(device);
@@ -1897,45 +2368,7 @@ static HRESULT __stdcall ImGuiResetHook(IDirect3DDevice9* device, D3DPRESENT_PAR
 
 static HRESULT __stdcall ImGuiPresentHook(IDirect3DDevice9* device, const RECT* src_rect, const RECT* dst_rect, HWND dst_wnd, const RGNDATA* dirty_region)
 {
-    ImGuiRememberDx9Device(device);
-
-    if (g_imgui_reload_requested.exchange(false))
-    {
-        ImGuiResetRenderContextState();
-        g_imgui_device = device;
-        LogInFile(LOG_NAME, xorstr_("[LOG] ImGui render context reset after client.dll reload.\n"));
-    }
-
-    if (!g_imgui_initialized)
-    {
-        ImGuiInitialize(device);
-    }
-
-    if (g_imgui_initialized)
-    {
-        ImGuiEnsureWndProcHook(device);
-
-        ImGuiUpdateSystemCursor();
-
-        int theme_request = g_imgui_theme_request.exchange(-1);
-        if (theme_request == 0) ImGui::StyleColorsDark();
-        else if (theme_request == 1) ImGui::StyleColorsLight();
-        else if (theme_request == 2) ImGui::StyleColorsClassic();
-
-        ImGui_ImplDX9_NewFrame();
-        ImGui_ImplWin32_NewFrame();
-        ImGui::NewFrame();
-
-        ImGuiIO& io = ImGui::GetIO();
-        io.MouseDrawCursor = false;
-
-        ImGuiProcessPendingResources();
-        ImGuiExecuteLuaQueue();
-        ImGuiDrawCustomCursor();
-
-        ImGui::Render();
-        ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
-    }
+    ImGuiRenderFrame(device);
 
     if (g_present_original)
         return g_present_original(device, src_rect, dst_rect, dst_wnd, dirty_region);
@@ -1943,17 +2376,51 @@ static HRESULT __stdcall ImGuiPresentHook(IDirect3DDevice9* device, const RECT* 
     return D3D_OK;
 }
 
+static HRESULT __stdcall ImGuiEndSceneHook(IDirect3DDevice9* device)
+{
+    ImGuiRememberDx9Device(device);
+
+    if (g_end_scene_original)
+        return g_end_scene_original(device);
+
+    return D3D_OK;
+}
+
 static bool ImGuiAreDx9HooksAlive()
 {
+    if (g_imgui_method_hooks_installed)
+    {
+        if (!g_imgui_present_target || !g_imgui_reset_target || !g_present_original || !g_reset_original)
+            return false;
+
+        if (!IsJumpHookInstalledTo(reinterpret_cast<DWORD>(g_imgui_present_target), reinterpret_cast<DWORD>(&ImGuiPresentHook)))
+            return false;
+
+        if (!IsJumpHookInstalledTo(reinterpret_cast<DWORD>(g_imgui_reset_target), reinterpret_cast<DWORD>(&ImGuiResetHook)))
+            return false;
+
+        if (g_imgui_end_scene_target && g_end_scene_original)
+            return IsJumpHookInstalledTo(reinterpret_cast<DWORD>(g_imgui_end_scene_target), reinterpret_cast<DWORD>(&ImGuiEndSceneHook));
+
+        return true;
+    }
+
     void** present_slot = get_function_slot(17);
     void** reset_slot = get_function_slot(16);
+    void** end_scene_slot = get_function_slot(42);
     if (!present_slot || !reset_slot)
         return false;
     if (!g_present_original || !g_reset_original)
         return false;
 
-    return (*present_slot == reinterpret_cast<void*>(&ImGuiPresentHook)) &&
-        (*reset_slot == reinterpret_cast<void*>(&ImGuiResetHook));
+    if (*present_slot != reinterpret_cast<void*>(&ImGuiPresentHook))
+        return false;
+    if (*reset_slot != reinterpret_cast<void*>(&ImGuiResetHook))
+        return false;
+    if (end_scene_slot && g_end_scene_original && *end_scene_slot != reinterpret_cast<void*>(&ImGuiEndSceneHook))
+        return false;
+
+    return true;
 }
 
 static bool ImGuiIsWndProcHookAlive()
@@ -1977,20 +2444,39 @@ static bool InstallDx9Hooks()
         LogInFile(LOG_NAME, xorstr_("[WARN] DX9 vtable hooks look overwritten, attempting reinstall.\n"));
         g_present_vtbl_hook.remove();
         g_reset_vtbl_hook.remove();
+        g_end_scene_vtbl_hook.remove();
+        ImGuiRemoveMinHook(g_imgui_present_target);
+        ImGuiRemoveMinHook(g_imgui_reset_target);
+        ImGuiRemoveMinHook(g_imgui_end_scene_target);
         g_present_original = nullptr;
         g_reset_original = nullptr;
+        g_end_scene_original = nullptr;
+        g_imgui_method_hooks_installed = false;
         g_imgui_hooks_installed = false;
     }
 
+    auto try_method_hooks = []() -> bool
+    {
+        if (!ImGuiInstallDx9MethodHooks())
+            return false;
+
+        g_imgui_hooks_installed = true;
+        ImGuiResetDx9HookFailureState();
+        return true;
+    };
+
+    ImGuiTryCaptureKnownDx9Device();
+
     void** present_slot = get_function_slot(17);
     void** reset_slot = get_function_slot(16);
+    void** end_scene_slot = get_function_slot(42);
     if (!present_slot || !reset_slot)
-        return false;
+        return try_method_hooks();
 
     if (!g_present_vtbl_hook.install(present_slot, reinterpret_cast<void*>(&ImGuiPresentHook)))
     {
         ImGuiLogDx9HookFailure("failed to patch Present slot %p (gle=%lu)", present_slot, GetLastError());
-        return false;
+        return try_method_hooks();
     }
     g_present_original = g_present_vtbl_hook.original<PresentSignature>();
 
@@ -1999,9 +2485,14 @@ static bool InstallDx9Hooks()
         g_present_vtbl_hook.remove();
         g_present_original = nullptr;
         ImGuiLogDx9HookFailure("failed to patch Reset slot %p (gle=%lu)", reset_slot, GetLastError());
-        return false;
+        return try_method_hooks();
     }
     g_reset_original = g_reset_vtbl_hook.original<ResetSignature>();
+
+    if (end_scene_slot && g_end_scene_vtbl_hook.install(end_scene_slot, reinterpret_cast<void*>(&ImGuiEndSceneHook)))
+        g_end_scene_original = g_end_scene_vtbl_hook.original<EndSceneSignature>();
+    else
+        g_end_scene_original = nullptr;
 
     g_imgui_hooks_installed = true;
     ImGuiResetDx9HookFailureState();
@@ -2068,11 +2559,27 @@ static void ImGuiHandleClientDllReload()
         had_device = g_imgui_device != nullptr;
         g_present_vtbl_hook.remove();
         g_reset_vtbl_hook.remove();
+        g_end_scene_vtbl_hook.remove();
+        ImGuiRemoveMinHook(g_imgui_present_target);
+        ImGuiRemoveMinHook(g_imgui_reset_target);
+        ImGuiRemoveMinHook(g_imgui_end_scene_target);
         g_present_original = nullptr;
         g_reset_original = nullptr;
+        g_end_scene_original = nullptr;
+        g_imgui_method_hooks_installed = false;
         g_imgui_hooks_installed = false;
         g_imgui_present_slot = nullptr;
         g_imgui_reset_slot = nullptr;
+        g_imgui_end_scene_slot = nullptr;
+        g_imgui_device = nullptr;
+        g_imgui_method_probe_broken = false;
+        g_imgui_next_method_probe_tick = 0;
+        g_imgui_method_probe_fail_count = 0;
+        for (bool& down : g_imgui_mouse_down)
+            down = false;
+
+        ImGuiRestoreWndProcHook();
+        g_imgui_hwnd_hint = nullptr;
     }
     g_imgui_reload_requested = true;
 
@@ -2081,7 +2588,7 @@ static void ImGuiHandleClientDllReload()
     else
         LogInFile(LOG_NAME, xorstr_("[LOG] client.dll reload detected before DX9 device capture.\n"));
 
-    if (!had_device || !InstallDx9Hooks())
+    if (!InstallDx9Hooks())
         StartImGuiHookingAsync();
 
     if (g_imgui_device && !ImGuiIsWndProcHookAlive())
@@ -2120,33 +2627,44 @@ static void ImGuiEnsureHooksForLuaInvoke()
 static void ShutdownImGuiHooking()
 {
     g_imgui_hook_thread_stop_requested = true;
-    g_imgui_hook_thread_running = false;
-    g_present_vtbl_hook.remove();
-    g_reset_vtbl_hook.remove();
-    g_present_original = nullptr;
-    g_reset_original = nullptr;
-    g_imgui_hooks_installed = false;
-    g_imgui_present_slot = nullptr;
-    g_imgui_reset_slot = nullptr;
-    g_imgui_device = nullptr;
 
-    ImGuiRemoveMinHook(g_imgui_create_device_ex_target);
-    ImGuiRemoveMinHook(g_imgui_create_device_target);
-    ImGuiRemoveMinHook(g_imgui_direct3d_create9ex_target);
-    ImGuiRemoveMinHook(g_imgui_direct3d_create9_target);
-    g_imgui_direct3d_create9_original = nullptr;
-    g_imgui_direct3d_create9ex_original = nullptr;
-    g_imgui_create_device_original = nullptr;
-    g_imgui_create_device_ex_original = nullptr;
-    g_imgui_d3d_factory_hooks_installed = false;
-    g_imgui_d3d9_module = nullptr;
-
-    if (g_imgui_hwnd && g_imgui_old_wndproc)
     {
-        SetWindowLongPtr(g_imgui_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_imgui_old_wndproc));
-        g_imgui_old_wndproc = nullptr;
+        std::lock_guard<std::mutex> lock(g_imgui_hook_state_mutex);
+        g_present_vtbl_hook.remove();
+        g_reset_vtbl_hook.remove();
+        g_end_scene_vtbl_hook.remove();
+        ImGuiRemoveMinHook(g_imgui_present_target);
+        ImGuiRemoveMinHook(g_imgui_reset_target);
+        ImGuiRemoveMinHook(g_imgui_end_scene_target);
+        g_present_original = nullptr;
+        g_reset_original = nullptr;
+        g_end_scene_original = nullptr;
+        g_imgui_method_hooks_installed = false;
+        g_imgui_hooks_installed = false;
+        g_imgui_present_slot = nullptr;
+        g_imgui_reset_slot = nullptr;
+        g_imgui_end_scene_slot = nullptr;
+        g_imgui_device = nullptr;
+        g_imgui_method_probe_broken = false;
+        g_imgui_next_method_probe_tick = 0;
+        g_imgui_method_probe_fail_count = 0;
+
+        ImGuiRemoveMinHook(g_imgui_create_device_ex_target);
+        ImGuiRemoveMinHook(g_imgui_create_device_from_ex_target);
+        ImGuiRemoveMinHook(g_imgui_create_device_target);
+        ImGuiRemoveMinHook(g_imgui_direct3d_create9ex_target);
+        ImGuiRemoveMinHook(g_imgui_direct3d_create9_target);
+        g_imgui_direct3d_create9_original = nullptr;
+        g_imgui_direct3d_create9ex_original = nullptr;
+        g_imgui_create_device_original = nullptr;
+        g_imgui_create_device_from_ex_original = nullptr;
+        g_imgui_create_device_ex_original = nullptr;
+        g_imgui_d3d_factory_hooks_installed = false;
+        g_imgui_d3d9_module = nullptr;
+
+        ImGuiRestoreWndProcHook();
+        g_imgui_hwnd_hint = nullptr;
     }
-    g_imgui_hwnd = nullptr;
 
     {
         std::lock_guard<std::mutex> lock(g_imgui_mutex);
@@ -2172,6 +2690,7 @@ static void ShutdownImGuiHooking()
     g_imgui_dx9_hook_last_fail_log = 0;
     ImGuiSetLuaRenderAllowed(false);
     ImGuiDestroyContextSafe();
+    g_imgui_hook_thread_running = false;
 }
 
 static bool HandleImGuiInvoke(void* lua_vm, const std::string& func_name)

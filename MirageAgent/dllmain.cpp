@@ -110,6 +110,7 @@ void AsyncThread()
     LogInFile(LOG_NAME, xorstr_("[LOG] Mirage Injector By DroidZero! Build Version: %s (%s)\n"), MIRAGE_VERSION, MIRAGE_VERSION_INFO);
     ParseLuaConfig(); // Читаем луашные конфиги, 1 конфиг на 1 луа скрипт
     ParseMirageConfig(); // Грузим настройки луа инжектора
+    StartImGuiHookingAsync();
 	if (!GetModuleHandleA(xorstr_("netc.dll"))) Sleep(1);
     if (mirage.fork_version == ForkVersion::FORK_VERSION_1_6)
     {
@@ -155,7 +156,6 @@ void AsyncThread()
 	}
     else LogInFile(LOG_NAME, xorstr_("[LOG] GetModuleHandleA to kernelbase/kernel32 module is NULL!\n"));
 
-    StartImGuiHookingAsync();
     //DROID_VM_FINISH();
 }
 
